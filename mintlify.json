@@ -1,0 +1,72 @@
+{
+  "name": "VelumX",
+  "logo": {
+    "light": "/velumx-logo.svg",
+    "dark": "/velumx-logo.svg"
+  },
+  "favicon": "/favicon.ico",
+  "colors": {
+    "primary": "#e91e63",
+    "light": "#00d2ff",
+    "dark": "#0f0f0f"
+  },
+  "topbarLinks": [
+    {
+      "name": "DeFi App",
+      "url": "https://velumx.xyz"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "GitHub",
+    "url": "https://github.com/VelumX"
+  },
+  "navigation": [
+    {
+      "group": "Introduction",
+      "pages": [
+        "docs/TECHNICAL_DOCUMENTATION",
+        "docs/PROJECT_DETAILS"
+      ]
+    },
+    {
+      "group": "Getting Started",
+      "pages": [
+        "docs/DEVELOPERS_GUIDE"
+      ]
+    },
+    {
+      "group": "Protocol Architecture",
+      "pages": [
+        "docs/GRANT",
+        "docs/PAYMASTER_USE_CASES"
+      ]
+    },
+    {
+      "group": "Operations",
+      "pages": [
+        "docs/RATE_LIMITING",
+        "docs/DEPLOYMENT_GUIDE_NETLIFY"
+      ]
+    },
+    {
+      "group": "Security & Trust",
+      "pages": [
+        "docs/SECURITY_AUDIT"
+      ]
+    },
+    {
+      "group": "Strategy & Roadmap",
+      "pages": [
+        "docs/BUSINESS_MODEL",
+        "docs/BUSINESS_PLAN",
+        "docs/FUTURE_ROADMAP",
+        "docs/HACKATHON_SUBMISSION",
+        "docs/PITCH_DECK"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "x": "https://x.com/VelumX",
+    "github": "https://github.com/VelumX"
+  }
+}
