@@ -1,0 +1,23 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#gradient1)"/>
+  
+  <!-- V Shape with Lightning Bolt -->
+  <path d="M60 50 L100 130 L140 50" stroke="white" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Lightning Bolt (Gas-Free Symbol) -->
+  <path d="M100 80 L90 110 L105 110 L95 140" stroke="#FFD700" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- X Symbol -->
+  <path d="M70 150 L130 150" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M85 140 L115 160" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M115 140 L85 160" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  
+  <!-- Gradient Definitions -->
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3B82F6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+</svg>

@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+dist/
+.cache/
+.next/
+out/
+build/
+
+# Secrets & Config
+.env
+**/.env
+**/.env.*
+**/settings/Mainnet.toml
+**/settings/Testnet.toml
+**/settings/Devnet.toml
+**/settings/*.toml
+
+# IDE & Logs
+.vscode/
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
