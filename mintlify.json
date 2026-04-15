@@ -4,7 +4,7 @@
     "light": "/velumx-logo.svg",
     "dark": "/velumx-logo.svg"
   },
-  "favicon": "/favicon.ico",
+  "favicon": "/velumx-icon.svg",
   "colors": {
     "primary": "#e91e63",
     "light": "#00d2ff",
@@ -61,6 +61,8 @@
         "docs/BUSINESS_PLAN",
         "docs/FUTURE_ROADMAP",
         "docs/HACKATHON_SUBMISSION",
+        "docs/HACKATHON_SUBMISSION_BUIDL_BATTLE",
+        "docs/GRANT",
         "docs/PITCH_DECK"
       ]
     }
