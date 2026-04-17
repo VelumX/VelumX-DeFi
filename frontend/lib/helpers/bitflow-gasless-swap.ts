@@ -43,7 +43,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   if (!bestRoute || !bestRoute.quote) throw new Error('No swap route found on Bitflow');
 
   const swapParams = await bitflow.getSwapParams({
-    route: bestRoute as any,
+    route: bestRoute.route,
     amount: Number(amountIn),
     tokenXDecimals: params.tokenInDecimals,
     tokenYDecimals: params.tokenOutDecimals,

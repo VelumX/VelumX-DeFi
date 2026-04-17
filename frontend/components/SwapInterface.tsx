@@ -297,14 +297,20 @@ export function SwapInterface() {
       const tokenOutId = getTokenId(state.outputToken);
       const amountIn = parseFloat(state.inputAmount);
 
-      console.log(`[Swap] Quoting: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
+      console.log(`[Swap] Requesting Quote: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
       const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
+        hasBestRoute: !!quoteResult?.bestRoute,
+        allRoutesCount: quoteResult?.allRoutes?.length,
+        bestRouteQuote: quoteResult?.bestRoute?.quote
+      }, null, 2));
+
       const bestRoute = quoteResult.bestRoute;
 
       if (!bestRoute || !bestRoute.quote) {
         console.warn(`[Swap] No route found for ${tokenInId} -> ${tokenOutId}`);
-        throw new Error('No liquidity found for this pair on Bitflow');
+        throw new Error(`No liquidity found for ${state.inputToken.symbol} to ${state.outputToken.symbol} on Bitflow`);
       }
 
       console.log(`[Swap] Success: ${bestRoute.quote} units`);
@@ -463,7 +469,7 @@ export function SwapInterface() {
         console.log('[Swap] Generating params for route:', bestRoute);
 
         const swapParams = await bitflow.getSwapParams({
-          route: bestRoute as any,
+          route: bestRoute.route,
           amount: amountIn,
           tokenXDecimals: state.inputToken.decimals,
           tokenYDecimals: state.outputToken.decimals,
