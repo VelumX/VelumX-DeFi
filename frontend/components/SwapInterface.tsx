@@ -81,32 +81,6 @@ function resolveTokenAddress(tokenId: string): string {
   return KNOWN_TOKEN_CONTRACTS[tokenId] || KNOWN_TOKEN_CONTRACTS[tokenId.toLowerCase()] || tokenId;
 }
 
-// Absolute minimal baseline for boot (STX is universal)
-const FALLBACK_STX: Token = {
-  symbol: 'STX',
-  name: 'Stacks',
-  address: 'token-wstx',
-  decimals: 6,
-  logoUrl: '', // Use letter avatar fallback
-};
-
-// High-priority VelumX assets that must be available even if discovery is pending
-const VELUMX_PRIORITY_TOKENS: Token[] = [
-  {
-    symbol: 'USDCx',
-    name: 'Circle USDC',
-    address: 'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx',
-    decimals: 6,
-    logoUrl: '',
-  },
-  {
-    symbol: 'ALEX',
-    name: 'ALEX Token',
-    address: 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex',
-    decimals: 8,
-    logoUrl: '',
-  },
-];
 
 export function SwapInterface() {
   const { stacksAddress, stacksConnected, balances, fetchBalances, stacksPublicKey, recoverPublicKey } = useWallet();
@@ -127,7 +101,7 @@ export function SwapInterface() {
     if (!token) return '0';
 
     // STX
-    if (token.symbol === 'STX' || token.address === 'token-wstx') {
+    if (token.symbol === 'STX' || token.address === 'token-wstx' || token.address.includes('token-wstx')) {
       return (balances as any).stx || '0';
     }
 
@@ -162,7 +136,7 @@ export function SwapInterface() {
     return (balances as any)[token.symbol.toLowerCase()] || '0';
   };
 
-  const [tokens, setTokens] = useState<Token[]>([FALLBACK_STX, ...VELUMX_PRIORITY_TOKENS]);
+  const [tokens, setTokens] = useState<Token[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [supportedGasTokens, setSupportedGasTokens] = useState<string[]>([]); // from developer settings
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
@@ -194,11 +168,9 @@ export function SwapInterface() {
             const currentAddr = prev.selectedGasToken?.address || '';
             const isCurrentSupported = data.supportedGasTokens.includes(currentAddr);
             if (!isCurrentSupported) {
-              // Resolve symbol/ID to a real contract principal
               const firstAddr = resolveTokenAddress(data.supportedGasTokens[0]);
-              const matchedToken = [FALLBACK_STX, ...VELUMX_PRIORITY_TOKENS].find(
-                t => t.address === firstAddr
-              ) || { symbol: firstAddr.split('.').pop()?.toUpperCase() || 'Token', name: firstAddr, address: firstAddr, decimals: 6 };
+              const matchedToken = tokens.find(t => t.address === firstAddr) || 
+                { symbol: 'Token', name: firstAddr, address: firstAddr, decimals: 6 };
               return { ...prev, selectedGasToken: matchedToken };
             }
             return prev;
@@ -208,12 +180,12 @@ export function SwapInterface() {
       .catch(() => {});
   }, []);
   const [state, setState] = useState<SwapState>({
-    inputToken: FALLBACK_STX,
-    outputToken: VELUMX_PRIORITY_TOKENS[0], // USDCx
+    inputToken: null,
+    outputToken: null,
     inputAmount: '',
     outputAmount: '',
     gaslessMode: true,
-    selectedGasToken: VELUMX_PRIORITY_TOKENS[0], // USDCx
+    selectedGasToken: null,
     isProcessing: false,
     isFetchingQuote: false,
     error: null,
@@ -236,9 +208,9 @@ export function SwapInterface() {
       list
         .map((t: any) => {
           const contractAddress = t.tokenContract || '';
-          const rawIcon = t.logoUrl || '';
+          const rawIcon = t.logoUrl || t.icon || t.logo_url || '';
           const logoUrl = rawIcon
-            ? `/api/image-proxy?url=${encodeURIComponent(rawIcon)}`
+            ? (rawIcon.startsWith('http') ? `/api/image-proxy?url=${encodeURIComponent(rawIcon)}` : rawIcon)
             : '';
           return {
             symbol: t.symbol || 'Unknown',
@@ -253,19 +225,19 @@ export function SwapInterface() {
 
     const applyTokens = (mapped: Token[]) => {
       if (!isMounted) return;
-      setTokens(() => {
-        const unique = [FALLBACK_STX, ...VELUMX_PRIORITY_TOKENS];
-        mapped.forEach(mt => {
-          const existingIdx = unique.findIndex(
-            ut => ut.address.toLowerCase() === mt.address.toLowerCase()
-          );
-          if (existingIdx === -1) {
-            unique.push(mt);
-          } else if (mt.logoUrl || mt.tokenId) {
-            unique[existingIdx] = { ...unique[existingIdx], ...mt };
-          }
-        });
-        return unique;
+      setTokens(mapped);
+
+      // Auto-select defaults once tokens are discovered
+      setState(prev => {
+        if (prev.inputToken && prev.outputToken) return prev;
+        const stx = mapped.find(t => t.symbol === 'STX');
+        const usdc = mapped.find(t => t.symbol === 'USDCx' || t.symbol === 'aeUSDC');
+        return {
+          ...prev,
+          inputToken: prev.inputToken || stx || mapped[0] || null,
+          outputToken: prev.outputToken || usdc || mapped[1] || null,
+          selectedGasToken: prev.selectedGasToken || usdc || stx || mapped[0] || null,
+        };
       });
     };
 
@@ -292,39 +264,7 @@ export function SwapInterface() {
     return () => { isMounted = false; };
   }, []);
 
-  // Merge wallet tokens into the token list — adds any token found in the wallet
-  // that isn't already in the ALEX SDK list (e.g. Pepe, Nothing, etc.)
-  useEffect(() => {
-    const allKeys = Object.keys(balances as any);
-    const principalKeys = allKeys.filter(k =>
-      k.includes('.') && !k.startsWith('decimals:') && !k.startsWith('name:') && !k.startsWith('symbol:')
-    );
-    if (principalKeys.length === 0) return;
-
-    setTokens(prev => {
-      const updated = [...prev];
-      let changed = false;
-      for (const principal of principalKeys) {
-        const alreadyExists = updated.some(t => t.address === principal);
-        if (alreadyExists) continue;
-        const rawBalance = (balances as any)[principal];
-        if (!rawBalance || rawBalance === '0') continue; // skip zero-balance tokens
-        const decimals = parseInt((balances as any)[`decimals:${principal}`] || '6');
-        // Prefer metadata symbol, then derive a clean symbol from the contract name
-        const contractName = principal.split('.')[1] || '';
-        const derivedSymbol = contractName
-          .replace(/-v\d+[a-z0-9]*$/i, '') // strip version suffix like -v4k68639zxz
-          .split('-')[0]
-          .toUpperCase();
-        const symbol = (balances as any)[`symbol:${principal}`] || derivedSymbol || 'TOKEN';
-        const name = (balances as any)[`name:${principal}`] || symbol;
-        updated.push({ symbol, name, address: principal, decimals, logoUrl: '' });
-        changed = true;
-      }
-      return changed ? updated : prev;
-    });
-  }, [balances]);
-
+  // Merging wallet tokens removed to remain fully reliant on Bitflow SDK
   const fetchQuote = async () => {
     if (!state.inputToken || !state.outputToken || !state.inputAmount) return;
 
@@ -333,8 +273,16 @@ export function SwapInterface() {
     try {
       const bitflow = getBitflowSDK();
       
-      const tokenInId = state.inputToken.tokenId || state.inputToken.address;
-      const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
+      // Helper to find tokenId from the discovered tokens list if missing
+      const getTokenId = (token: Token) => {
+        if (token.tokenId) return token.tokenId;
+        // Fallback: look up in discovered tokens by address
+        const match = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
+        return match?.tokenId || token.address;
+      };
+
+      const tokenInId = getTokenId(state.inputToken);
+      const tokenOutId = getTokenId(state.outputToken);
       const amountIn = parseFloat(state.inputAmount);
 
       console.log(`Swap: Bitflow Quote request — ${tokenInId} → ${tokenOutId}, amount: ${amountIn}`);
@@ -455,13 +403,20 @@ export function SwapInterface() {
         // Use VelumX SDK for gasless swaps via Bitflow
         const { executeBitflowGaslessSwap } = await import('@/lib/helpers/bitflow-gasless-swap');
         
+        // Helper to find tokenId from the discovered tokens list if missing
+        const getTokenId = (token: Token) => {
+          if (token.tokenId) return token.tokenId;
+          const match = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
+          return match?.tokenId || token.address;
+        };
+
         const txid = await executeBitflowGaslessSwap({
           userAddress: stacksAddress,
           userPublicKey: stacksPublicKey || undefined,
           tokenIn: state.inputToken.address,
-          tokenInId: state.inputToken.tokenId || state.inputToken.address,
+          tokenInId: getTokenId(state.inputToken),
           tokenOut: state.outputToken.address,
-          tokenOutId: state.outputToken.tokenId || state.outputToken.address,
+          tokenOutId: getTokenId(state.outputToken),
           amountIn: state.inputAmount,
           feeToken: state.selectedGasToken?.address || '',
           onProgress: (step) => {
@@ -481,8 +436,15 @@ export function SwapInterface() {
         // Standard non-gasless swap via Bitflow SDK
         const bitflow = getBitflowSDK();
         
-        const tokenInId = state.inputToken.tokenId || state.inputToken.address;
-        const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
+        // Helper to find tokenId from the discovered tokens list if missing
+        const getTokenId = (token: Token) => {
+          if (token.tokenId) return token.tokenId;
+          const match = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
+          return match?.tokenId || token.address;
+        };
+
+        const tokenInId = getTokenId(state.inputToken);
+        const tokenOutId = getTokenId(state.outputToken);
         const amountIn = parseFloat(state.inputAmount);
 
         const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
@@ -580,13 +542,10 @@ export function SwapInterface() {
           <span className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
             {isDiscovering ? 'Discovering Liquidity...' : `${tokens.length} Assets Synchronized`}
           </span>
-          {tokens.length <= 1 && (
-             <button 
-                onClick={() => setTokens([FALLBACK_STX, ...VELUMX_PRIORITY_TOKENS])}
-                className="text-[10px] font-bold text-purple-500 hover:underline ml-2"
-             >
-               Force Sync
-             </button>
+          {tokens.length <= 1 && isDiscovering && (
+             <span className="text-[10px] font-bold text-purple-500 ml-2 animate-pulse">
+               Connecting...
+             </span>
           )}
         </div>
 
