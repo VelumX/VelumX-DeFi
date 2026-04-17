@@ -36,6 +36,7 @@ interface SwapQuote {
   priceImpact: string;
   fee: string;
   rate: string;
+  bestRoute?: any; // Store the full route object from Bitflow
 }
 
 interface SwapState {
@@ -319,6 +320,7 @@ export function SwapInterface() {
           priceImpact: '0.30', // Placeholder
           fee: '0.3%',
           rate,
+          bestRoute, // Store the actual route object for execution
         },
         isFetchingQuote: false,
       }));
@@ -432,6 +434,8 @@ export function SwapInterface() {
           tokenOut: state.outputToken.address,
           tokenOutId: getTokenId(state.outputToken),
           amountIn: state.inputAmount,
+          tokenInDecimals: state.inputToken.decimals,
+          tokenOutDecimals: state.outputToken.decimals,
           feeToken: state.selectedGasToken?.address || '',
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
@@ -450,20 +454,13 @@ export function SwapInterface() {
         // Standard non-gasless swap via Bitflow SDK
         const bitflow = getBitflowSDK();
         
-        // Helper to find tokenId from the discovered tokens list if missing
-        const getTokenId = (token: Token) => {
-          if (token.tokenId) return token.tokenId;
-          const match = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
-          return match?.tokenId || token.address;
-        };
+        // Use the route stored in our quote state to ensure consistency
+        const bestRoute = state.quote.bestRoute;
+        if (!bestRoute) throw new Error('No valid swap route found in state. Please refresh the quote.');
 
-        const tokenInId = getTokenId(state.inputToken);
-        const tokenOutId = getTokenId(state.outputToken);
         const amountIn = parseFloat(state.inputAmount);
 
-        const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
-        const bestRoute = quoteResult.bestRoute;
-        if (!bestRoute) throw new Error('No swap route found on Bitflow');
+        console.log('[Swap] Generating params for route:', bestRoute);
 
         const swapParams = await bitflow.getSwapParams({
           route: bestRoute as any,

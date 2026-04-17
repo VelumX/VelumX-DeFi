@@ -24,6 +24,8 @@ export interface BitflowGaslessSwapParams {
   tokenOut: string;
   tokenOutId: string;
   amountIn: string | number;
+  tokenInDecimals: number;
+  tokenOutDecimals: number;
   feeToken: string;
   onProgress?: (status: string) => void;
 }
@@ -43,12 +45,12 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const swapParams = await bitflow.getSwapParams({
     route: bestRoute as any,
     amount: Number(amountIn),
-    tokenXDecimals: 6, // Defaulting for now
-    tokenYDecimals: 6,
+    tokenXDecimals: params.tokenInDecimals,
+    tokenYDecimals: params.tokenOutDecimals,
   }, userAddress, 0.01);
 
-  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, 6)); 
-  const minAmountOutRaw = Math.floor(bestRoute.quote * 0.98 * Math.pow(10, 6)); // 2% slippage
+  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals)); 
+  const minAmountOutRaw = Math.floor(bestRoute.quote * 0.98 * Math.pow(10, params.tokenOutDecimals)); // 2% slippage
 
   // 2. Estimate Fee
   onProgress?.('Estimating gasless fee...');
