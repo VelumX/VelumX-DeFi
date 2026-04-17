@@ -85,7 +85,7 @@ export function getBackendConfig(): BackendConfig {
         maxRetries: parseNumber(process.env.MAX_RETRIES, 3),
         transactionTimeout: parseNumber(process.env.TRANSACTION_TIMEOUT, 3600000),
         maxRequestsPerMinute: parseNumber(process.env.MAX_REQUESTS_PER_MINUTE, 100),
-        velumxRelayerUrl: process.env.VELUMX_RELAYER_URL || 'https://sgal-relayer.onrender.com',
+        velumxRelayerUrl: process.env.VELUMX_RELAYER_URL || 'https://velumx-relayer.onrender.com',
         velumxApiKey: process.env.VELUMX_API_KEY || '',
     };
 }
