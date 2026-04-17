@@ -207,11 +207,8 @@ export function SwapInterface() {
     const mapTokens = (list: any[]): Token[] =>
       list
         .map((t: any) => {
-          const contractAddress = t.tokenContract || '';
-          const rawIcon = t.logoUrl || t.icon || t.logo_url || '';
-          const logoUrl = rawIcon
-            ? (rawIcon.startsWith('http') ? `/api/image-proxy?url=${encodeURIComponent(rawIcon)}` : rawIcon)
-            : '';
+          const contractAddress = t.tokenContract || (t.tokenId === 'token-stx' ? 'STX' : '');
+          const logoUrl = t.logoUrl || t.icon || t.logo_url || '';
           return {
             symbol: t.symbol || 'Unknown',
             name: t.name || t.symbol || 'Unknown Token',
@@ -221,7 +218,10 @@ export function SwapInterface() {
             tokenId: t.tokenId,
           };
         })
-        .filter(t => t.symbol !== 'Unknown' && t.address && t.address.includes('.'));
+        .filter(t => 
+          t.symbol !== 'Unknown' && 
+          (t.address?.includes('.') || t.symbol === 'STX' || t.tokenId === 'token-stx')
+        );
 
     const applyTokens = (mapped: Token[]) => {
       if (!isMounted) return;
@@ -230,7 +230,7 @@ export function SwapInterface() {
       // Auto-select defaults once tokens are discovered
       setState(prev => {
         if (prev.inputToken && prev.outputToken) return prev;
-        const stx = mapped.find(t => t.symbol === 'STX');
+        const stx = mapped.find(t => t.symbol === 'STX' || t.tokenId === 'token-stx');
         const usdc = mapped.find(t => t.symbol === 'USDCx' || t.symbol === 'aeUSDC');
         return {
           ...prev,
@@ -285,14 +285,17 @@ export function SwapInterface() {
       const tokenOutId = getTokenId(state.outputToken);
       const amountIn = parseFloat(state.inputAmount);
 
-      console.log(`Swap: Bitflow Quote request — ${tokenInId} → ${tokenOutId}, amount: ${amountIn}`);
+      console.log(`[Swap] Quoting: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
       const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
       const bestRoute = quoteResult.bestRoute;
 
       if (!bestRoute || !bestRoute.quote) {
+        console.warn(`[Swap] No route found for ${tokenInId} -> ${tokenOutId}`);
         throw new Error('No liquidity found for this pair on Bitflow');
       }
+
+      console.log(`[Swap] Success: ${bestRoute.quote} units`);
 
       const outputAmountFormatted = bestRoute.quote.toFixed(6);
       const rate = (bestRoute.quote / amountIn).toFixed(6);
