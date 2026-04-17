@@ -9,9 +9,10 @@ import {
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
 import { BitflowSDK, QuoteResult } from '@bitflowlabs/core-sdk';
+import { getBitflowSDK } from '../bitflow';
 import { request } from '@stacks/connect';
 
-const bitflow = new BitflowSDK();
+const bitflow = getBitflowSDK();
 const PROJECT_ID_MAINNET = 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV';
 const BITFLOW_EXECUTOR_MAINNET = 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.bitflow-executor-v1';
 

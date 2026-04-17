@@ -14,6 +14,7 @@ import { getStacksTransactions, getStacksNetwork, getStacksCommon, getStacksConn
 import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
 import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
+import { getBitflowSDK } from '@/lib/bitflow';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
@@ -271,7 +272,7 @@ export function SwapInterface() {
     const fetchBitflowTokens = async () => {
       try {
         setIsDiscovering(true);
-        const bitflow = new BitflowSDK();
+        const bitflow = getBitflowSDK();
         const bitflowTokens = await bitflow.getAvailableTokens();
         
         if (bitflowTokens?.length > 0) {
@@ -330,7 +331,7 @@ export function SwapInterface() {
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
 
     try {
-      const bitflow = new BitflowSDK();
+      const bitflow = getBitflowSDK();
       
       const tokenInId = state.inputToken.tokenId || state.inputToken.address;
       const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
@@ -478,7 +479,7 @@ export function SwapInterface() {
         }));
       } else {
         // Standard non-gasless swap via Bitflow SDK
-        const bitflow = new BitflowSDK();
+        const bitflow = getBitflowSDK();
         
         const tokenInId = state.inputToken.tokenId || state.inputToken.address;
         const tokenOutId = state.outputToken.tokenId || state.outputToken.address;

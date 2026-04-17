@@ -10,6 +10,7 @@
  */
 
 import { BitflowSDK, type Token, type QuoteResult, type SelectedSwapRoute, type RouteQuote } from '@bitflowlabs/core-sdk';
+import { getBitflowSDK } from '../bitflow';
 import { Cl } from '@stacks/transactions';
 import { request } from '@stacks/connect';
 
@@ -31,10 +32,7 @@ export const DEFAULT_ALEX_FACTOR = 100000000;
 
 // ── SDK instance ─────────────────────────────────────────────────────────────
 
-const bitflow = new BitflowSDK({
-  BITFLOW_API_HOST: 'https://api.bitflowapis.finance',
-  READONLY_CALL_API_HOST: 'https://node.bitflowapis.finance',
-});
+const bitflow = getBitflowSDK();
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
