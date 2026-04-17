@@ -225,18 +225,29 @@ export function SwapInterface() {
 
     const applyTokens = (mapped: Token[]) => {
       if (!isMounted) return;
+      console.log(`[Swap] Discovery Complete: ${mapped.length} tokens found`);
       setTokens(mapped);
 
       // Auto-select defaults once tokens are discovered
       setState(prev => {
         if (prev.inputToken && prev.outputToken) return prev;
+        
+        // Find best candidates for defaults
         const stx = mapped.find(t => t.symbol === 'STX' || t.tokenId === 'token-stx');
-        const usdc = mapped.find(t => t.symbol === 'USDCx' || t.symbol === 'aeUSDC');
+        const usdcx = mapped.find(t => t.symbol === 'USDCx');
+        const aeusdc = mapped.find(t => t.symbol === 'aeUSDC');
+        const usda = mapped.find(t => t.symbol === 'USDA');
+        
+        // Prioritize USDCx as the default stable, fallback to others if missing
+        const defaultStable = usdcx || aeusdc || usda || mapped[1];
+        
+        console.log(`[Swap] Setting defaults — STX: ${!!stx}, USDCx: ${!!usdcx}, aeUSDC: ${!!aeusdc}, USDA: ${!!usda}`);
+        
         return {
           ...prev,
           inputToken: prev.inputToken || stx || mapped[0] || null,
-          outputToken: prev.outputToken || usdc || mapped[1] || null,
-          selectedGasToken: prev.selectedGasToken || usdc || stx || mapped[0] || null,
+          outputToken: prev.outputToken || defaultStable || mapped[1] || null,
+          selectedGasToken: prev.selectedGasToken || defaultStable || stx || mapped[0] || null,
         };
       });
     };
