@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@bitflowlabs/core-sdk": "^3.1.0",
+    "alex-sdk": "^1.1.2",
     "@prisma/client": "^6.19.2",
     "@scure/base": "^1.2.6",
     "@scure/bip32": "^2.0.1",
