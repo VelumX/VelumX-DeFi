@@ -13,7 +13,7 @@ import { formatUnits, parseUnits } from 'viem';
 import { getStacksTransactions, getStacksNetwork, getStacksCommon, getStacksConnect, getNetworkInstance } from '@/lib/stacks-loader';
 import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
-import { AlexSDK } from 'alex-sdk';
+import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
@@ -26,7 +26,8 @@ interface Token {
   address: string;
   decimals: number;
   logoUrl?: string;
-  assetName?: string; // Explicit asset name for post-conditions
+  assetName?: string;
+  tokenId?: string; // Added for Bitflow
 }
 
 interface SwapQuote {
@@ -110,67 +111,26 @@ export function SwapInterface() {
   const { stacksAddress, stacksConnected, balances, fetchBalances, stacksPublicKey, recoverPublicKey } = useWallet();
   const config = useConfig();
 
-  // ALEX SDK balances: keyed by ALEX Currency ID (e.g. 'age000-governance-token'),
-  // values are bigint in 1e8 units. Used as primary source for ALEX-listed tokens.
-  const [alexBalances, setAlexBalances] = React.useState<Record<string, bigint>>({});
-  // Map from contract principal → ALEX Currency ID, built from fetchSwappableCurrency
-  const [alexCurrencyMap, setAlexCurrencyMap] = React.useState<Record<string, string>>({});
-
-  // Fetch ALEX SDK balances whenever the wallet address changes
-  const refreshAlexBalances = React.useCallback(async () => {
-    if (!stacksAddress) return;
-    try {
-      const alex = new AlexSDK();
-      const bals = await alex.getBalances(stacksAddress) as Record<string, bigint>;
-      setAlexBalances(bals);
-    } catch (e) {
-      console.warn('ALEX SDK getBalances refresh failed:', e);
-    }
-  }, [stacksAddress]);
-
   React.useEffect(() => {
     if (!stacksAddress) return;
-    let cancelled = false;
-    const alex = new AlexSDK();
     (async () => {
       try {
-        // Build principal → currencyId map from token list
-        const tokenInfos = await alex.fetchSwappableCurrency();
-        const principalToId: Record<string, string> = {};
-        for (const t of tokenInfos) {
-          const principal = (t.wrapToken || t.underlyingToken || '').split('::')[0];
-          if (principal) principalToId[principal.toLowerCase()] = (t as any).id;
-        }
-        if (!cancelled) setAlexCurrencyMap(principalToId);
-
-        // Fetch balances — returns { [Currency]: bigint } in 1e8 units
-        const bals = await alex.getBalances(stacksAddress) as Record<string, bigint>;
-        if (!cancelled) setAlexBalances(bals);
+        await fetchBalances();
       } catch (e) {
-        console.warn('ALEX SDK getBalances failed:', e);
+        console.warn('Balance refresh failed:', e);
       }
     })();
-    return () => { cancelled = true; };
-  }, [stacksAddress]);
+  }, [stacksAddress, fetchBalances]);
 
   const getBalance = (token: Token | null): string => {
     if (!token) return '0';
 
-    // STX — ALEX SDK uses Currency.STX = 'token-wstx', value is bigint in 1e8
+    // STX
     if (token.symbol === 'STX' || token.address === 'token-wstx') {
-      const alexBal = alexBalances['token-wstx'];
-      if (alexBal !== undefined) return (Number(alexBal) / 1e8).toFixed(6);
       return (balances as any).stx || '0';
     }
 
-    // Try ALEX SDK balance first — look up by contract principal → Currency ID
-    const currencyId = alexCurrencyMap[token.address.toLowerCase()];
-    if (currencyId) {
-      const alexBal = alexBalances[currencyId];
-      if (alexBal !== undefined) return (Number(alexBal) / 1e8).toFixed(6);
-    }
-
-    // Fallback: Hiro API balance (for wallet-only tokens like Pepe, Nothing, etc.)
+    // Hiro API balance (for SIP-010 tokens)
     const byPrincipal = (balances as any)[token.address];
     if (byPrincipal !== undefined && byPrincipal !== null && byPrincipal !== '0') {
       const storedDecimals = (balances as any)[`decimals:${token.address}`];
@@ -264,36 +224,31 @@ export function SwapInterface() {
     isRegistering: false,
   });
 
-  // Dynamic Token Discovery via ALEX SDK
+  // Dynamic Token Discovery via Bitflow SDK
   useEffect(() => {
     let isMounted = true;
 
-    const CACHE_KEY = 'velumx_alex_tokens_v2';
+    const CACHE_KEY = 'velumx_bitflow_tokens_v1';
     const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
     const mapTokens = (list: any[]): Token[] =>
       list
         .map((t: any) => {
-          // wrapToken is the actual Stacks contract principal (e.g. SP...token-alex::token-alex)
-          // underlyingToken is the fallback for tokens without a wrap
-          const wrapPrincipal = t.wrapToken ? t.wrapToken.split('::')[0] : '';
-          const underlyingPrincipal = t.underlyingToken ? t.underlyingToken.split('::')[0] : '';
-          const contractAddress = wrapPrincipal || underlyingPrincipal || t.contractAddress || t.address || '';
-          // Resolve known ALEX SDK IDs to correct contract principals
-          const resolvedAddress = resolveTokenAddress(contractAddress || t.id || '');
-          const rawIcon = t.icon || '';
+          const contractAddress = t.tokenContract || '';
+          const rawIcon = t.logoUrl || '';
           const logoUrl = rawIcon
             ? `/api/image-proxy?url=${encodeURIComponent(rawIcon)}`
             : '';
           return {
-            symbol: t.name || t.symbol || t.id || 'Unknown',
+            symbol: t.symbol || 'Unknown',
             name: t.name || t.symbol || 'Unknown Token',
-            address: resolvedAddress || 'unknown-address',
-            decimals: t.wrapTokenDecimals ?? t.underlyingTokenDecimals ?? t.decimals ?? 8,
+            address: contractAddress,
+            decimals: t.tokenDecimals || 6,
             logoUrl,
+            tokenId: t.tokenId,
           };
         })
-        .filter(t => t.symbol !== 'Unknown' && t.address !== 'unknown-address');
+        .filter(t => t.symbol !== 'Unknown' && t.address && t.address.includes('.'));
 
     const applyTokens = (mapped: Token[]) => {
       if (!isMounted) return;
@@ -301,82 +256,30 @@ export function SwapInterface() {
         const unique = [FALLBACK_STX, ...VELUMX_PRIORITY_TOKENS];
         mapped.forEach(mt => {
           const existingIdx = unique.findIndex(
-            ut => ut.symbol.toLowerCase() === mt.symbol.toLowerCase() ||
-                  ut.address.toLowerCase() === mt.address.toLowerCase()
+            ut => ut.address.toLowerCase() === mt.address.toLowerCase()
           );
           if (existingIdx === -1) {
             unique.push(mt);
-          } else if (mt.logoUrl) {
-            // SDK version has logo/metadata — update the existing entry
-            unique[existingIdx] = { ...unique[existingIdx], logoUrl: mt.logoUrl, name: mt.name };
+          } else if (mt.logoUrl || mt.tokenId) {
+            unique[existingIdx] = { ...unique[existingIdx], ...mt };
           }
         });
-        console.log(`Swap: ${unique.length} total assets available.`);
         return unique;
       });
     };
 
-    const fetchAlexTokens = async () => {
+    const fetchBitflowTokens = async () => {
       try {
         setIsDiscovering(true);
-
-        // Option 1: Check localStorage cache first — show instantly if fresh
-        try {
-          const cached = localStorage.getItem(CACHE_KEY);
-          if (cached) {
-            const { timestamp, data } = JSON.parse(cached);
-            if (Date.now() - timestamp < CACHE_TTL && data?.length > 0) {
-              console.log(`Swap: Loaded ${data.length} tokens from cache instantly`);
-              applyTokens(mapTokens(data));
-              setIsDiscovering(false);
-              // Still refresh in background silently
-              const alex = new AlexSDK();
-              alex.fetchSwappableCurrency().then(fresh => {
-                if (fresh?.length > 0) {
-                  localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
-                  applyTokens(mapTokens(fresh));
-                }
-              }).catch(() => {});
-              return;
-            }
-          }
-        } catch (e) { /* localStorage unavailable */ }
-
-        // Option 3: Static import already done — no dynamic import delay
-        // Just instantiate and fetch
-        console.log("Swap: Fetching tokens from ALEX SDK...");
-        const alex = new AlexSDK();
-        let alexTokensList: any[] = [];
-
-        try {
-          const tokenInfos = await alex.fetchSwappableCurrency();
-          if (tokenInfos?.length > 0) {
-            alexTokensList = tokenInfos;
-            // Save to cache
-            try {
-              localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: tokenInfos }));
-            } catch (e) {}
-          }
-        } catch (innerError) {
-          console.error("Swap: fetchSwappableCurrency failed:", innerError);
+        const bitflow = new BitflowSDK();
+        const bitflowTokens = await bitflow.getAvailableTokens();
+        
+        if (bitflowTokens?.length > 0) {
+          applyTokens(mapTokens(bitflowTokens));
+          try {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: bitflowTokens }));
+          } catch (e) {}
         }
-
-        // Fallback if SDK fetch failed
-        if (alexTokensList.length === 0) {
-          alexTokensList = [
-            { id: 'age000-governance-token', name: 'ALEX', icon: '' },
-            { id: 'token-susdt', name: 'sUSDT', icon: '' },
-            { id: 'token-wstx', name: 'wSTX', icon: '' },
-            { id: 'token-wbtc', name: 'xBTC', icon: '' },
-            { id: 'token-aeusdc', name: 'aeUSDC', icon: '' },
-            { id: 'token-ausd', name: 'aUSD', icon: '' },
-            { id: 'token-wslm', name: 'wSLM', icon: '' },
-            { id: 'token-wnycc', name: 'wNYCC', icon: '' },
-            { id: 'token-wmia', name: 'wMIA', icon: '' },
-          ];
-        }
-
-        applyTokens(mapTokens(alexTokensList));
       } catch (e) {
         console.error("Swap: Discovery Critical Failure", e);
       } finally {
@@ -384,7 +287,7 @@ export function SwapInterface() {
       }
     };
 
-    fetchAlexTokens();
+    fetchBitflowTokens();
     return () => { isMounted = false; };
   }, []);
 
@@ -427,71 +330,40 @@ export function SwapInterface() {
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
 
     try {
-      const alex = new AlexSDK() as any;
+      const bitflow = new BitflowSDK();
+      
+      const tokenInId = state.inputToken.tokenId || state.inputToken.address;
+      const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
+      const amountIn = parseFloat(state.inputAmount);
 
-      // ALEX SDK expects amounts in 1e8 units regardless of token decimals
-      // Convert: human amount → 1e8 micro units
-      const ALEX_DECIMALS = 8;
-      const amountInAlex = BigInt(Math.floor(
-        parseFloat(state.inputAmount) * Math.pow(10, ALEX_DECIMALS)
-      ));
+      console.log(`Swap: Bitflow Quote request — ${tokenInId} → ${tokenOutId}, amount: ${amountIn}`);
 
-      // ALEX SDK needs its internal currency ID, not the contract address.
-      // For STX/wSTX use 'token-wstx'. For others, try to find the matching
-      // token from fetchSwappableCurrency by matching the wrapToken contract address.
-      const resolveAlexId = async (token: Token): Promise<string> => {
-        if (token.symbol === 'STX' || token.address === 'token-wstx') return 'token-wstx';
-        
-        // Try to get the full token list and find the matching ALEX id
-        try {
-          const allTokens = await alex.fetchSwappableCurrency();
-          const match = allTokens.find((t: any) => {
-            const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : t.id;
-            return contractAddr?.toLowerCase() === token.address?.toLowerCase() ||
-                   t.id?.toLowerCase() === token.address?.toLowerCase();
-          });
-          if (match) return match.id;
-        } catch (e) {}
-        
-        // Fallback: use address directly (works for some tokens)
-        return token.address;
-      };
+      const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      const bestRoute = quoteResult.bestRoute;
 
-      const tokenIn = await resolveAlexId(state.inputToken);
-      const tokenOut = await resolveAlexId(state.outputToken);
-
-      console.log(`Swap: Quote request — ${tokenIn} → ${tokenOut}, amount: ${amountInAlex}`);
-
-      const amountOut = await alex.getAmountTo(tokenIn, amountInAlex, tokenOut);
-
-      if (amountOut === undefined || amountOut === null) {
-        throw new Error('No liquidity found for this pair on ALEX');
+      if (!bestRoute || !bestRoute.quote) {
+        throw new Error('No liquidity found for this pair on Bitflow');
       }
 
-      // ALEX SDK always returns amounts in 1e8 units regardless of token decimals
-      // Always divide by 1e8 for display
-      const outputAmountFormatted = (Number(amountOut) / Math.pow(10, ALEX_DECIMALS)).toFixed(6);
-      // Rate: both in human units
-      const inputHuman = parseFloat(state.inputAmount);
-      const outputHuman = Number(amountOut) / Math.pow(10, ALEX_DECIMALS);
-      const rate = (outputHuman / inputHuman).toFixed(6);
+      const outputAmountFormatted = bestRoute.quote.toFixed(6);
+      const rate = (bestRoute.quote / amountIn).toFixed(6);
 
       setState(prev => ({
         ...prev,
         outputAmount: outputAmountFormatted,
         quote: {
           amountOut: outputAmountFormatted,
-          priceImpact: '0.30',
+          priceImpact: '0.30', // Placeholder
           fee: '0.3%',
           rate,
         },
         isFetchingQuote: false,
       }));
     } catch (error) {
-      console.error('Failed to fetch quote via ALEX SDK:', error);
+      console.error('Failed to fetch quote via Bitflow SDK:', error);
       setState(prev => ({
         ...prev,
-        error: 'No liquidity pool found for this pair on ALEX.',
+        error: 'No liquidity pool found for this pair on Bitflow.',
         isFetchingQuote: false,
       }));
     }
@@ -579,23 +451,18 @@ export function SwapInterface() {
       const useGasless = state.gaslessMode;
 
       if (useGasless) {
-        // Use VelumX SDK for gasless swaps
-        const { executeSimpleGaslessSwap } = await import('@/lib/helpers/simple-gasless-swap');
+        // Use VelumX SDK for gasless swaps via Bitflow
+        const { executeBitflowGaslessSwap } = await import('@/lib/helpers/bitflow-gasless-swap');
         
-        const amountInMicro = parseUnits(state.inputAmount, state.inputToken.decimals).toString();
-        const minOutHuman = parseFloat(state.outputAmount) * (1 - state.slippage / 100);
-        // ALEX SDK uses 1e8 internally for all tokens — minOut must be in 1e8 units
-        const minAmountOutMicro = BigInt(Math.floor(minOutHuman * 1e8)).toString();
-
-        const txid = await executeSimpleGaslessSwap({
+        const txid = await executeBitflowGaslessSwap({
           userAddress: stacksAddress,
           userPublicKey: stacksPublicKey || undefined,
-          tokenIn: state.inputToken.symbol === 'STX' ? 'token-wstx' : state.inputToken.address,
-          tokenOut: state.outputToken.symbol === 'STX' ? 'token-wstx' : state.outputToken.address,
-          amountIn: amountInMicro,
-          minOut: minAmountOutMicro,
-          tokenInDecimals: state.inputToken.decimals,
-          feeToken: state.selectedGasToken?.address,
+          tokenIn: state.inputToken.address,
+          tokenInId: state.inputToken.tokenId || state.inputToken.address,
+          tokenOut: state.outputToken.address,
+          tokenOutId: state.outputToken.tokenId || state.outputToken.address,
+          amountIn: state.inputAmount,
+          feeToken: state.selectedGasToken?.address || '',
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }
@@ -609,75 +476,33 @@ export function SwapInterface() {
           outputAmount: '',
           quote: null,
         }));
-
-        // Poll until balance changes or 15 minutes pass (Stacks blocks ~10 min)
-        if (fetchBalances && stacksAddress) {
-          const inputToken = state.inputToken;
-          const prevInputBalance = getBalance(inputToken);
-          const maxAttempts = 60; // 60 × 15s = 15 minutes
-          let attempts = 0;
-
-          const poll = async () => {
-            attempts++;
-            await fetchBalances();
-            await refreshAlexBalances();
-            const newBalance = getBalance(inputToken);
-            if (newBalance !== prevInputBalance) {
-              setState(prev => ({
-                ...prev,
-                success: `Swap confirmed! TX: ${txid}`,
-              }));
-              return;
-            }
-            if (attempts < maxAttempts) {
-              setTimeout(poll, 15000);
-            }
-          };
-
-          setTimeout(poll, 10000); // first check after 10s
-        }
       } else {
-        // Standard non-gasless swap via ALEX SDK
-        const alex = new AlexSDK();
+        // Standard non-gasless swap via Bitflow SDK
+        const bitflow = new BitflowSDK();
         
-        const amountInMicro = BigInt(parseUnits(state.inputAmount, state.inputToken.decimals).toString());
-        const minAmountOutMicro = BigInt(parseUnits(
-          (parseFloat(state.outputAmount) * (1 - state.slippage / 100)).toFixed(6),
-          state.outputToken.decimals
-        ).toString());
+        const tokenInId = state.inputToken.tokenId || state.inputToken.address;
+        const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
+        const amountIn = parseFloat(state.inputAmount);
 
-        const tokenIn = (state.inputToken.symbol === 'STX' ? 'token-wstx' : state.inputToken.address) as any;
-        const tokenOut = (state.outputToken.symbol === 'STX' ? 'token-wstx' : state.outputToken.address) as any;
+        const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+        const bestRoute = quoteResult.bestRoute;
+        if (!bestRoute) throw new Error('No swap route found on Bitflow');
 
-        // Perform swap via Alex SDK
-        // Note: ALEX SDK handles connect/wallet interaction internally or provides the tx hex
-        // We'll use the connect integration for the best UX
+        const swapParams = await bitflow.getSwapParams({
+          route: bestRoute as any,
+          amount: amountIn,
+          tokenXDecimals: state.inputToken.decimals,
+          tokenYDecimals: state.outputToken.decimals,
+        }, stacksAddress, state.slippage / 100);
+
         const { getStacksConnect } = await import('@/lib/stacks-loader');
         const connect = await getStacksConnect();
 
-        // This is a simplified version of ALEX integration
-        // In a real app, we might use alex.getSwapTransaction or similar
-        // For now, we manually build the ALEX call to ensure compatibility with our loader
-        const transactions = await import('@stacks/transactions');
-        const { Cl, Pc } = transactions;
-        
-        // ALEX swaps often use multi-hops. The SDK's 'getRouter' provides the path.
-        const router = await alex.getRouter(tokenIn, tokenOut);
-        
-        // Map ALEX router to contract calls
-        // For simplicity, we use the direct vault call if possible
-        const [contractAddress, contractName] = config.stacksSwapContractAddress.split('.');
-
         await connect.openContractCall({
-          contractAddress,
-          contractName,
-          functionName: 'swap-helper', // Typical ALEX swap helper
-          functionArgs: [
-            Cl.principal(tokenIn),
-            Cl.principal(tokenOut),
-            Cl.uint(amountInMicro.toString()),
-            Cl.uint(minAmountOutMicro.toString())
-          ],
+          contractAddress: swapParams.contractAddress,
+          contractName: swapParams.contractName,
+          functionName: swapParams.functionName,
+          functionArgs: swapParams.functionArgs,
           network: 'mainnet',
           anchorMode: 'any',
           postConditionMode: 'allow',

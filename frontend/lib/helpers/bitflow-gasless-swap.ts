@@ -2,11 +2,14 @@ import {
   principalCV, 
   uintCV, 
   contractPrincipalCV,
-  ClarityValue
+  ClarityValue,
+  makeUnsignedContractCall,
+  PostConditionMode
 } from '@stacks/transactions';
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
 import { BitflowSDK, QuoteResult } from '@bitflowlabs/core-sdk';
+import { request } from '@stacks/connect';
 
 const bitflow = new BitflowSDK();
 const PROJECT_ID_MAINNET = 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV';
@@ -14,6 +17,7 @@ const BITFLOW_EXECUTOR_MAINNET = 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.bitfl
 
 export interface BitflowGaslessSwapParams {
   userAddress: string;
+  userPublicKey?: string;
   tokenIn: string;
   tokenInId: string;
   tokenOut: string;
@@ -23,8 +27,8 @@ export interface BitflowGaslessSwapParams {
   onProgress?: (status: string) => void;
 }
 
-export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams) {
-  const { userAddress, tokenIn, tokenInId, tokenOut, tokenOutId, amountIn, feeToken, onProgress } = params;
+export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams): Promise<string> {
+  const { userAddress, userPublicKey, tokenIn, tokenInId, tokenOut, tokenOutId, amountIn, feeToken, onProgress } = params;
   
   const velumx = getVelumXClient();
   const config = getConfig();
@@ -57,7 +61,29 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const [feeTokenAddr, feeTokenName] = feeToken.split('.');
   const [execAddr, execName] = BITFLOW_EXECUTOR_MAINNET.split('.');
 
-  const txOptions = {
+  // Get public key
+  let publicKey = userPublicKey || '';
+  if (!publicKey) {
+    try {
+      const addrResult = await request('stx_getAddresses') as any;
+      const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === userAddress)
+        || (addrResult?.addresses || [])[0];
+      publicKey = stxEntry?.publicKey || '';
+    } catch (e) { console.warn('stx_getAddresses failed:', e); }
+  }
+  if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
+
+  // Fetch nonce
+  let nonce = 0n;
+  try {
+    const nonceRes = await fetch(`https://api.mainnet.hiro.so/v2/accounts/${userAddress}?proof=0`);
+    if (nonceRes.ok) {
+      const accountData = await nonceRes.json();
+      nonce = BigInt(accountData.nonce ?? 0);
+    }
+  } catch (e) { console.warn('Failed to fetch nonce:', e); }
+
+  const transaction = await makeUnsignedContractCall({
     contractAddress: execAddr,
     contractName: execName,
     functionName: 'execute-swap',
@@ -74,8 +100,42 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       contractPrincipalCV(feeTokenAddr, feeTokenName),
     ],
     network: 'mainnet',
-  };
+    sponsored: true,
+    publicKey,
+    fee: 0n,
+    nonce,
+    postConditionMode: PostConditionMode.Allow,
+    postConditions: [],
+    validateWithAbi: false,
+  });
 
-  onProgress?.('Finalizing gasless transaction...');
-  return txOptions;
+  const txHex = transaction.serialize();
+
+  // 4. Wallet signs WITHOUT broadcasting
+  onProgress?.('Waiting for wallet signature...');
+  let signedTxHex: string;
+  try {
+    const signResult = await request('stx_signTransaction', {
+      transaction: txHex,
+      broadcast: false,
+    });
+    signedTxHex = (signResult as any).transaction || (signResult as any).txHex;
+    if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
+  } catch (err: any) {
+    if (err?.message?.toLowerCase().includes('cancel') || err?.code === 4001) {
+      throw new Error('Swap cancelled by user');
+    }
+    throw err;
+  }
+
+  // 5. Relayer co-signs + broadcasts
+  onProgress?.('Broadcasting via VelumX...');
+  const result = await velumx.sponsor(signedTxHex, {
+    feeToken: feeToken,
+    feeAmount: feeAmount,
+    network: 'mainnet'
+  });
+
+  console.log('VelumX Bitflow sponsor result:', result);
+  return result.txid;
 }
