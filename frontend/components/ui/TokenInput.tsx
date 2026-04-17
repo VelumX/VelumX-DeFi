@@ -108,7 +108,7 @@ export function TokenInput({
                     >
                         {shouldShowImage(token) ? (
                             <img src={token!.logoUrl} alt={token!.symbol} className="w-5 h-5 rounded-full"
-                                onError={() => handleImageError(token!.address)} crossOrigin="anonymous" />
+                                onError={() => handleImageError(token!.address)} />
                         ) : (
                             <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px]">
                                 {token?.symbol?.[0]}
@@ -168,7 +168,7 @@ export function TokenInput({
                                             <div className="flex items-center gap-3">
                                                 {shouldShowImage(t) ? (
                                                     <img src={t.logoUrl} alt={t.symbol} className="w-8 h-8 rounded-full"
-                                                        onError={() => handleImageError(t.address)} crossOrigin="anonymous" />
+                                                        onError={() => handleImageError(t.address)} />
                                                 ) : (
                                                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-xs font-bold text-white uppercase">
                                                         {t.symbol[0]}
