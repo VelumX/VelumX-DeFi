@@ -36,7 +36,8 @@ interface SwapQuote {
   priceImpact: string;
   fee: string;
   rate: string;
-  bestRoute?: any; // Store the full route object from Bitflow
+  bestRoute?: any;
+  allRoutes?: any[]; // All available routes from Bitflow
 }
 
 interface SwapState {
@@ -339,6 +340,7 @@ export function SwapInterface() {
           fee: '0.3%',
           rate,
           bestRoute, // Store the actual route object for execution
+          allRoutes: quoteResult.allRoutes?.filter(r => r.quote !== null) || [],
         },
         isFetchingQuote: false,
       }));
@@ -638,6 +640,69 @@ export function SwapInterface() {
             outputAmount={state.outputAmount}
             slippage={state.slippage}
           />
+
+          {/* Route Display */}
+          {state.quote?.allRoutes && state.quote.allRoutes.length > 0 && (
+            <div className="mt-4 rounded-2xl overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>
+              <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: 'var(--bg-primary)' }}>
+                <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: 'var(--text-secondary)' }}>
+                  Routes ({state.quote.allRoutes.length})
+                </span>
+              </div>
+              <div className="divide-y" style={{ borderColor: 'var(--border-color)' }}>
+                {state.quote.allRoutes
+                  .sort((a: any, b: any) => (b.quote || 0) - (a.quote || 0))
+                  .map((route: any, i: number) => {
+                    const isBest = route === state.quote?.bestRoute ||
+                      (route.quote !== null && route.quote === state.quote?.bestRoute?.quote);
+                    const dexPath: string[] = route.dexPath || route.dex_path || [];
+                    const tokenPath: string[] = route.tokenPath || route.token_path || [];
+                    const quoteVal: number | null = route.quote;
+
+                    return (
+                      <div
+                        key={i}
+                        className="px-4 py-3 flex items-center justify-between gap-3 transition-colors"
+                        style={{
+                          backgroundColor: isBest ? 'rgba(139,92,246,0.08)' : 'transparent',
+                        }}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap min-w-0">
+                          {isBest && (
+                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 shrink-0">
+                              Best
+                            </span>
+                          )}
+                          {/* DEX path badges */}
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {dexPath.length > 0 ? dexPath.map((dex: string, j: number) => (
+                              <span key={j} className="text-[10px] font-bold px-2 py-0.5 rounded-md"
+                                style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+                                {dex}
+                              </span>
+                            )) : (
+                              <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                                {tokenPath.join(' → ')}
+                              </span>
+                            )}
+                          </div>
+                          {/* Token path */}
+                          {tokenPath.length > 0 && (
+                            <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+                              {tokenPath.map((t: string) => t.replace('token-', '').toUpperCase()).join(' → ')}
+                            </span>
+                          )}
+                        </div>
+                        <span className={`text-xs font-bold shrink-0 ${isBest ? 'text-purple-400' : ''}`}
+                          style={{ color: isBest ? undefined : 'var(--text-primary)' }}>
+                          {quoteVal !== null ? quoteVal.toFixed(4) : '—'}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
 
           <GaslessToggle
             enabled={state.gaslessMode}

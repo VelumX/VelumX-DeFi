@@ -157,6 +157,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const p = swapData.parameters;
     const fn = swapData.function;
+    const order: string[] = p['order'] || [];
 
     // Resolve any simnet token addresses to mainnet equivalents
     const resolveTokenAddr = (addr: string): string => MAINNET_CONTRACT_MAP[addr] || addr;
@@ -166,65 +167,50 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       return `${resolveTokenAddr(addr)}.${name}`;
     };
 
-    // Apply slippage to min-received / min-dy / min-dz / min-dw
-    const applySlippage = (val: any) => {
-      if (val === undefined || val === null) return undefined;
-      return BigInt(Math.floor(Number(val) * 0.99)); // 1% slippage
-    };
+    // Min-out keys — apply 1% slippage to whichever is present
+    const MIN_OUT_KEYS = new Set(['min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min', 'min-x-amount', 'min-y-amount']);
+    // Keys that are uint amounts (not principals)
+    const UINT_KEYS = new Set(['id', 'factor', 'factor-x', 'factor-y', 'factor-z', 'factor-w',
+      'dx', 'dy', 'amt-in', 'amt-out', 'amount', 'x-amount', 'y-amount',
+      'min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min',
+      'min-x-amount', 'min-y-amount', 'min-dx']);
 
-    let functionArgs: any[];
+    // Build args from the order array
+    const functionArgs: any[] = order.map((key: string) => {
+      const val = p[key];
 
-    if (fn === 'swap-helper') {
-      // swap-helper(token-x-trait, token-y-trait, factor, dx, min-dy)
-      functionArgs = [
-        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
-        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
-        uintCV(BigInt(p['factor'])),
-        uintCV(BigInt(p['dx'] ?? amountInRaw)),
-        toOptUint(applySlippage(p['min-dy'])),
-      ];
-    } else if (fn === 'swap-helper-a') {
-      // swap-helper-a(token-x-trait, token-y-trait, token-z-trait, factor-x, factor-y, dx, min-dz)
-      functionArgs = [
-        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
-        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
-        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
-        uintCV(BigInt(p['factor-x'])),
-        uintCV(BigInt(p['factor-y'])),
-        uintCV(BigInt(p['dx'] ?? amountInRaw)),
-        toOptUint(applySlippage(p['min-dz'])),
-      ];
-    } else if (fn === 'swap-helper-b') {
-      // swap-helper-b(token-x-trait, token-y-trait, token-z-trait, token-w-trait, factor-x, factor-y, factor-z, dx, min-dw)
-      functionArgs = [
-        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
-        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
-        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
-        toContractCV(resolveTokenPrincipal(p['token-w-trait'] || p['token-w'])),
-        uintCV(BigInt(p['factor-x'])),
-        uintCV(BigInt(p['factor-y'])),
-        uintCV(BigInt(p['factor-z'])),
-        uintCV(BigInt(p['dx'] ?? amountInRaw)),
-        toOptUint(applySlippage(p['min-dw'])),
-      ];
-    } else if (fn === 'swap-helper-c') {
-      // swap-helper-c(token-x, token-y, token-z, token-w, token-v, factor-x, factor-y, factor-z, factor-w, dx, min-dv)
-      functionArgs = [
-        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
-        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
-        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
-        toContractCV(resolveTokenPrincipal(p['token-w-trait'] || p['token-w'])),
-        toContractCV(resolveTokenPrincipal(p['token-v-trait'] || p['token-v'])),
-        uintCV(BigInt(p['factor-x'])),
-        uintCV(BigInt(p['factor-y'])),
-        uintCV(BigInt(p['factor-z'])),
-        uintCV(BigInt(p['factor-w'])),
-        uintCV(BigInt(p['dx'] ?? amountInRaw)),
-        toOptUint(applySlippage(p['min-dv'])),
-      ];
-    } else {
-      throw new Error(`Unsupported Bitflow swap function: ${fn}`);
-    }
+      // Principal fields
+      if (typeof val === 'string' && val.includes('.')) {
+        return toContractCV(resolveTokenPrincipal(val));
+      }
+
+      // Uint fields
+      if (UINT_KEYS.has(key)) {
+        if (val === undefined || val === null) {
+          return uintCV(0n);
+        }
+        // Apply slippage to min-out values
+        if (MIN_OUT_KEYS.has(key)) {
+          return uintCV(BigInt(Math.floor(Number(val) * 0.99)));
+        }
+        return uintCV(BigInt(val));
+      }
+
+      // Fallback: if it looks like a number, treat as uint
+      if (val !== undefined && val !== null && !isNaN(Number(val))) {
+        return uintCV(BigInt(val));
+      }
+
+      throw new Error(`Cannot convert parameter "${key}" = "${val}" to Clarity value`);
+    });
+
+    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
+      originalContract: swapData.contract,
+      resolvedContract: `${resolvedContractAddress}.${contractName}`,
+      fn,
+      order,
+      argsCount: functionArgs.length,
+    });
 
     txOptions = {
       contractAddress: resolvedContractAddress,
@@ -232,12 +218,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       functionName: fn,
       functionArgs,
     };
-    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
-      originalContract: swapData.contract,
-      resolvedContract: `${resolvedContractAddress}.${contractName}`,
-      fn,
-      argsCount: functionArgs.length,
-    });
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
     // Extract token principals from the route for the executor trait-forwarding args.
