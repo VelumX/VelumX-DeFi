@@ -122,7 +122,16 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       contractAddress,
       contractName,
       functionName: swapParams.functionName,
-      functionArgs: swapParams.functionArgs,
+      functionArgs: [
+        uintCV(poolId),
+        principalCV(tokenInPrincipal),
+        principalCV(tokenOutPrincipal),
+        principalCV(token0),
+        principalCV(token1),
+        uintCV(amountInRaw),
+        uintCV(minAmountOutRaw),
+        principalCV(userAddress)
+      ],
       sponsored: true,
       network: 'mainnet'
     };
