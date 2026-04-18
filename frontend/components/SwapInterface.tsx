@@ -141,6 +141,8 @@ export function SwapInterface() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [supportedGasTokens, setSupportedGasTokens] = useState<string[]>([]); // from developer settings
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
+  // Set of tokenIds reachable from the currently selected input token via Bitflow routes
+  const [reachableTokenIds, setReachableTokenIds] = useState<Set<string> | null>(null);
   const gasDropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Close gas dropdown on outside click
@@ -219,6 +221,18 @@ export function SwapInterface() {
 
     const mapTokens = (list: any[]): Token[] =>
       list
+        .filter((t: any) => {
+          // Keep only tokens that live on Stacks (have a Stacks contract principal).
+          // This excludes pure L1 assets (BTC, ETH) while keeping bridged tokens
+          // like USDCx that are deployed as SIP-010 contracts on Stacks and have
+          // Bitflow liquidity. Route availability is enforced separately via
+          // getAllPossibleTokenY when the user selects an input token.
+          const isStx = t['token-id'] === 'token-stx' || t.tokenId === 'token-stx';
+          const hasStacksContract = t.tokenContract && (
+            t.tokenContract.startsWith('SP')
+          );
+          return isStx || hasStacksContract;
+        })
         .map((t: any) => {
           const contractAddress = t.tokenContract || (t.tokenId === 'token-stx' ? 'STX' : '');
           const logoUrl = t.logoUrl || t.icon || t.logo_url || '';
@@ -231,8 +245,8 @@ export function SwapInterface() {
             tokenId: t.tokenId,
           };
         })
-        .filter(t => 
-          t.symbol !== 'Unknown' && 
+        .filter(t =>
+          t.symbol !== 'Unknown' &&
           (t.address?.includes('.') || t.symbol === 'STX' || t.tokenId?.startsWith('token-'))
         );
 
@@ -378,6 +392,29 @@ export function SwapInterface() {
   }, [state.gaslessMode, state.selectedGasToken]);
 
   // Fetch quote and fee estimate when input changes
+  // When input token changes, fetch which output tokens Bitflow can route to
+  useEffect(() => {
+    if (!state.inputToken?.tokenId) {
+      setReachableTokenIds(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchReachable = async () => {
+      try {
+        const bitflow = getBitflowSDK();
+        const reachable = await bitflow.getAllPossibleTokenY(state.inputToken!.tokenId!);
+        if (!cancelled) {
+          setReachableTokenIds(new Set(reachable));
+        }
+      } catch (e) {
+        console.warn('[Swap] Failed to fetch reachable tokens:', e);
+        if (!cancelled) setReachableTokenIds(null); // null = show all on error
+      }
+    };
+    fetchReachable();
+    return () => { cancelled = true; };
+  }, [state.inputToken?.tokenId]);
+
   useEffect(() => {
     if (state.inputToken && state.outputToken && state.inputAmount && parseFloat(state.inputAmount) > 0) {
       const timer = setTimeout(() => {
@@ -403,6 +440,8 @@ export function SwapInterface() {
       inputAmount: prev.outputAmount,
       outputAmount: prev.inputAmount,
       quote: null,
+      success: null,
+      error: null,
     }));
   };
 
@@ -470,6 +509,25 @@ export function SwapInterface() {
           outputAmount: '',
           quote: null,
         }));
+
+        // Poll for balance change after gasless swap (same pattern as non-gasless path)
+        if (fetchBalances && stacksAddress) {
+          const inputToken = state.inputToken;
+          const prevInputBalance = getBalance(inputToken);
+          const maxAttempts = 60;
+          let attempts = 0;
+          const poll = async () => {
+            attempts++;
+            await fetchBalances();
+            const newBalance = getBalance(inputToken);
+            if (newBalance !== prevInputBalance) {
+              setState(prev => ({ ...prev, success: `Swap confirmed! TX: ${txid}` }));
+              return;
+            }
+            if (attempts < maxAttempts) setTimeout(poll, 15000);
+          };
+          setTimeout(poll, 10000);
+        }
       } else {
         // Standard non-gasless swap via Bitflow SDK
         const bitflow = getBitflowSDK();
@@ -593,7 +651,7 @@ export function SwapInterface() {
             amount={state.inputAmount}
             setAmount={(val: string) => setState(prev => ({ ...prev, inputAmount: val, error: null }))}
             token={state.inputToken}
-            setToken={(t) => setState(prev => ({ ...prev, inputToken: t }))}
+            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, success: null, error: null }))}
             tokens={tokens}
             balance={getBalance(state.inputToken)}
             isProcessing={state.isProcessing}
@@ -622,8 +680,14 @@ export function SwapInterface() {
             amount={state.outputAmount}
             setAmount={() => { }}
             token={state.outputToken}
-            setToken={(t) => setState(prev => ({ ...prev, outputToken: t }))}
-            tokens={tokens}
+            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
+            tokens={
+              // Filter output tokens to only those Bitflow can route to from the selected input.
+              // Falls back to full list if reachableTokenIds is null (loading or error).
+              reachableTokenIds
+                ? tokens.filter(t => t.tokenId && reachableTokenIds.has(t.tokenId))
+                : tokens
+            }
             balance={getBalance(state.outputToken)}
             isProcessing={state.isProcessing}
             variant="blue"
