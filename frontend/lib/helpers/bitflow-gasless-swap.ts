@@ -271,6 +271,18 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
         console.log('[Bitflow] Trying route:', `${resolvedContractAddress}.${resolvedContractName}`, swapData.function);
 
+        // Verify the contract actually exists on mainnet before calling getSwapParams.
+        // getSwapParams fetches the ABI from the Bitflow node (which serves simnet ABIs),
+        // so it succeeds even for undeployed contracts. We must check mainnet directly.
+        const abiCheck = await fetch(
+          `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
+        );
+        if (!abiCheck.ok) {
+          throw new Error(
+            `Contract ${resolvedContractAddress}.${resolvedContractName} not found on mainnet (${abiCheck.status}). Route skipped.`
+          );
+        }
+
         // Use the SDK to build function args — it handles all Clarity type conversions,
         // ABI fetching, and slippage correctly. We just patch the contract address.
         const swapParams = await bitflow.getSwapParams(
