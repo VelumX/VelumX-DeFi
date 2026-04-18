@@ -112,8 +112,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,    
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-2`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`, // v-1-2 not on mainnet → use v-1-1
-    // wrapper-velar-path-v-1-2 — new Velar path variant, map to deployed multihop wrapper
-    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-path-v-1-2`]:     `${BITFLOW_DEPLOYER}.wrapper-velar-multihop-v-1-1`,
+    // wrapper-velar-path-v-1-2 (swap-univ2v2) — not yet deployed on mainnet, no mapping.
+    // The ABI 404 check in the retry loop will skip this route automatically.
     // router-stableswap-xyk-v-1-3 — confirmed deployed at Bitflow deployer (verified via Hiro API)
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stableswap-xyk-v-1-3`]:  `${BITFLOW_DEPLOYER}.router-stableswap-xyk-v-1-3`,
     // ── Velar deployer overrides (SM2* → SP1Y5*) — Velar-native contracts ────
