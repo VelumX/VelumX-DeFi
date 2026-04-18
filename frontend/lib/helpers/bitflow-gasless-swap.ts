@@ -1,11 +1,7 @@
 import { 
-  principalCV, 
   uintCV, 
   tupleCV,
   serializeCV,
-  someCV,
-  noneCV,
-  bufferCV,
   PostConditionMode,
   makeUnsignedContractCall,
   Cl
@@ -125,26 +121,21 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   let txOptions: any;
   
   if (isDeveloperSponsoring) {
-    // DEVELOPER_SPONSORS: User pays nothing. Bypass VelumX contracts and call Bitflow directly.
+    // DEVELOPER_SPONSORS: User pays nothing. Call Bitflow directly using SDK-provided params.
     // The relayer will sponsor the STX gas via the /broadcast endpoint.
-    const fullContract = swapParams.contractAddress || 'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.univ2-router';
-    const [contractAddress, contractName] = fullContract.split('.');
+    // Use swapParams directly — functionArgs are already proper Clarity values from the SDK.
+    const [contractAddress, contractName] = swapParams.contractAddress.split('.');
     txOptions = {
       contractAddress,
       contractName,
-      functionName: swapParams.functionName || 'swap-exact-tokens-for-tokens',
-      functionArgs: [
-        Cl.uint(poolId),
-        Cl.principal(tokenInPrincipal),
-        Cl.principal(tokenOutPrincipal),
-        Cl.principal(token0),
-        Cl.principal(token1),
-        Cl.uint(amountInRaw),
-        Cl.uint(minAmountOutRaw),
-        Cl.principal(userAddress)
-      ],
+      functionName: swapParams.functionName,
+      functionArgs: swapParams.functionArgs,
     };
-    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)');
+    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
+      contract: swapParams.contractAddress,
+      fn: swapParams.functionName,
+      argsCount: swapParams.functionArgs.length,
+    });
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
     txOptions = velumx.getExecuteGenericOptions({
