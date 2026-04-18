@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const getRelayerConfig = () => ({
-  relayerUrl: process.env.VELUMX_RELAYER_URL || 'https://api.velumx.xyz',
+  relayerUrl: process.env.VELUMX_RELAYER_URL || 'https://velumx-relayer.onrender.com',
   apiKey: process.env.VELUMX_API_KEY,
 });
 
