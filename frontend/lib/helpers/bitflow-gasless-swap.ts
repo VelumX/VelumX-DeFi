@@ -165,13 +165,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   
   const signResult: any = await new Promise((resolve, reject) => {
     request('stx_callContract', {
-      ...txOptions,
-      publicKey,
-      nonce: Number(nonce),
+      contractAddress: txOptions.contractAddress,
+      contractName: txOptions.contractName,
+      functionName: txOptions.functionName,
+      functionArgs: txOptions.functionArgs,
       sponsored: true,
+      network: STACKS_MAINNET,
       postConditionMode: PostConditionMode.Allow,
       postConditions: [], // We'll re-enable these once the flow is stable
-      broadcast: false, // DON'T broadcast yet
       onFinish: (data: any) => resolve(data),
       onCancel: () => reject(new Error('Swap cancelled by user')),
     } as any);
