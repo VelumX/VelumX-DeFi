@@ -141,8 +141,8 @@ export function SwapInterface() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [supportedGasTokens, setSupportedGasTokens] = useState<string[]>([]); // from developer settings
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
-  // Set of tokenIds reachable from the currently selected input token via Bitflow routes
   const [reachableTokenIds, setReachableTokenIds] = useState<Set<string> | null>(null);
+  const [isLoadingReachable, setIsLoadingReachable] = useState(false);
   const gasDropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Close gas dropdown on outside click
@@ -396,19 +396,25 @@ export function SwapInterface() {
   useEffect(() => {
     if (!state.inputToken?.tokenId) {
       setReachableTokenIds(null);
+      setIsLoadingReachable(false);
       return;
     }
     let cancelled = false;
+    setIsLoadingReachable(true);
     const fetchReachable = async () => {
       try {
         const bitflow = getBitflowSDK();
         const reachable = await bitflow.getAllPossibleTokenY(state.inputToken!.tokenId!);
         if (!cancelled) {
           setReachableTokenIds(new Set(reachable));
+          setIsLoadingReachable(false);
         }
       } catch (e) {
         console.warn('[Swap] Failed to fetch reachable tokens:', e);
-        if (!cancelled) setReachableTokenIds(null); // null = show all on error
+        if (!cancelled) {
+          setReachableTokenIds(null); // null = show all on error
+          setIsLoadingReachable(false);
+        }
       }
     };
     fetchReachable();
@@ -655,6 +661,7 @@ export function SwapInterface() {
             tokens={tokens}
             balance={getBalance(state.inputToken)}
             isProcessing={state.isProcessing}
+            isLoadingTokens={isDiscovering}
             onMax={() => setState(prev => ({ ...prev, inputAmount: getBalance(state.inputToken) }))}
             variant="purple"
             getTokenBalance={getBalance}
@@ -682,14 +689,16 @@ export function SwapInterface() {
             token={state.outputToken}
             setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
             tokens={
-              // Filter output tokens to only those Bitflow can route to from the selected input.
-              // Falls back to full list if reachableTokenIds is null (loading or error).
-              reachableTokenIds
+              // While loading reachable tokens, show full list to avoid blank dropdown.
+              // Once loaded, filter to only tokens Bitflow can route to from the selected input.
+              // Falls back to full list if fetch failed (null).
+              (!isLoadingReachable && reachableTokenIds)
                 ? tokens.filter(t => t.tokenId && reachableTokenIds.has(t.tokenId))
                 : tokens
             }
             balance={getBalance(state.outputToken)}
             isProcessing={state.isProcessing}
+            isLoadingTokens={isLoadingReachable}
             variant="blue"
             getTokenBalance={getBalance}
           />

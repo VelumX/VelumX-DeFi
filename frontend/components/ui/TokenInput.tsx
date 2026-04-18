@@ -19,6 +19,7 @@ interface TokenInputProps {
     tokens: Token[];
     balance: string;
     isProcessing: boolean;
+    isLoadingTokens?: boolean;
     onMax?: () => void;
     variant?: 'purple' | 'blue';
     getTokenBalance?: (token: Token) => string;
@@ -33,6 +34,7 @@ export function TokenInput({
     tokens,
     balance,
     isProcessing,
+    isLoadingTokens = false,
     onMax,
     variant = 'purple',
     getTokenBalance,
@@ -76,7 +78,7 @@ export function TokenInput({
             <div className="flex items-center justify-between mb-6">
                 <span className="text-xs font-black uppercase tracking-[0.2em]" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{label}</span>
                 <div className="flex items-center gap-2">
-                    {tokens.length <= 4 && (
+                    {isLoadingTokens && (
                         <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20">
                             <Loader2 className="w-2.5 h-2.5 text-purple-500 animate-spin" />
                             <span className="text-[8px] font-black uppercase tracking-tighter text-purple-600 dark:text-purple-400">Discovering...</span>
