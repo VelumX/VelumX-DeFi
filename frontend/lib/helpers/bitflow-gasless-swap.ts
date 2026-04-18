@@ -42,11 +42,73 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   onProgress?.('Fetching quote from Bitflow...');
   const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, Number(amountIn));
 
-  // Known simnet→mainnet deployer address mappings.
-  // The Bitflow API returns simnet addresses for some DEX integrations.
+  // ─── Bitflow Mainnet Contract Resolution ────────────────────────────────────
+  //
+  // The Bitflow API/SDK returns simnet (SM*) or testnet (ST*) deployer addresses
+  // for several DEX integrations. We must map these to their correct mainnet
+  // equivalents before building a sponsored transaction.
+  //
+  // Deployer address mappings (simnet/testnet → mainnet):
+  //   SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR → SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM  (ALEX AMM / XYK)
+  //   SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT → SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1  (Velar)
+  //
+  // IMPORTANT — contract-level overrides:
+  //   Some contracts returned by the API use the XYK simnet deployer address
+  //   (SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR) but are actually deployed
+  //   under the main Bitflow deployer (SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M).
+  //   These include all router-*, wrapper-*, stableswap-*, earn-*, and lp-token-*
+  //   contracts. The FULL_CONTRACT_OVERRIDES map handles these cases explicitly.
+  //
+  // Source: https://docs.bitflow.finance/bitflow-documentation/developers/deployed-contracts/stacks
+
+  // Step 1 — deployer-level address remapping (catches XYK core contracts)
   const MAINNET_CONTRACT_MAP: Record<string, string> = {
-    'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM', // ALEX AMM
-    'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1', // Velar
+    'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM', // ALEX AMM / XYK deployer
+    'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1', // Velar deployer
+  };
+
+  // Step 2 — full contract overrides: "simnetAddr.contractName" → "mainnetAddr.contractName"
+  // These take priority over the deployer-level map above.
+  // All Bitflow-native contracts (stableswap, earn, lp-token, router, wrapper) live at
+  // SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M regardless of what deployer the API returns.
+  const BITFLOW_DEPLOYER = 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M';
+  const FULL_CONTRACT_OVERRIDES: Record<string, string> = {
+    // ── StableSwap contracts ──────────────────────────────────────────────────
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-stx-ststx-v-1-2`]:   `${BITFLOW_DEPLOYER}.stableswap-stx-ststx-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-usda-susdt-v-1-2`]:  `${BITFLOW_DEPLOYER}.stableswap-usda-susdt-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-aeusdc-susdt-v-1-2`]:`${BITFLOW_DEPLOYER}.stableswap-aeusdc-susdt-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-usda-aeusdc-v-1-2`]: `${BITFLOW_DEPLOYER}.stableswap-usda-aeusdc-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-usda-aeusdc-v-1-4`]: `${BITFLOW_DEPLOYER}.stableswap-usda-aeusdc-v-1-4`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.stableswap-abtc-xbtc-v-1-2`]:   `${BITFLOW_DEPLOYER}.stableswap-abtc-xbtc-v-1-2`,
+    // ── Router contracts ──────────────────────────────────────────────────────
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-arkadiko-v-1-1`]: `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-arkadiko-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-velar-v-1-2`]:   `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-velar-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-alex-v-1-1`]:    `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-alex-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-alex-v-1-2`]:    `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-alex-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-alex-v-2-1`]:    `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-alex-v-2-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-ststx-bitflow-xyk-v-1-1`]:     `${BITFLOW_DEPLOYER}.router-stx-ststx-bitflow-xyk-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stx-usda-arkadiko-alex-v-1-1`]:    `${BITFLOW_DEPLOYER}.router-stx-usda-arkadiko-alex-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-xyk-arkadiko-v-1-1`]:              `${BITFLOW_DEPLOYER}.router-xyk-arkadiko-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-xyk-velar-v-1-1`]:                 `${BITFLOW_DEPLOYER}.router-xyk-velar-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-xyk-alex-v-1-1`]:                  `${BITFLOW_DEPLOYER}.router-xyk-alex-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-xyk-alex-v-1-2`]:                  `${BITFLOW_DEPLOYER}.router-xyk-alex-v-1-2`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-velar-alex-v-1-1`]:                `${BITFLOW_DEPLOYER}.router-velar-alex-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-velar-alex-v-1-2`]:                `${BITFLOW_DEPLOYER}.router-velar-alex-v-1-2`,
+    // ── Wrapper contracts ─────────────────────────────────────────────────────
+    // Note: the API may return v-1-2 but only v-1-1 is deployed on mainnet.
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-1`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-2`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,   // v-1-2 not on mainnet → use v-1-1
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-multihop-v-1-1`]: `${BITFLOW_DEPLOYER}.wrapper-velar-multihop-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-2`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`, // v-1-2 not on mainnet → use v-1-1
+    // ── Velar deployer overrides (SM2* → SP1Y5*) — Velar-native contracts ────
+    // wrapper-velar-v-1-2 is deployed at the Velar address per Bitflow docs
+    [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.wrapper-velar-v-1-2`]:          `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.wrapper-velar-v-1-2`,
+    [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.univ2-core`]:                   `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-core`,
+    [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.univ2-router`]:                 `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-router`,
+    [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.univ2-library`]:                `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-library`,
+    [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.univ2-share-fee-to`]:           `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-share-fee-to`,
   };
 
   // Known mainnet contract names per deployer — used to validate a route is executable on mainnet.
@@ -54,20 +116,54 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // the route is skipped.
   const KNOWN_MAINNET_CONTRACTS: Record<string, Set<string>> = {
     'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM': new Set([
+      // ALEX AMM
       'amm-pool-v2-01', 'amm-vault-v2-01', 'amm-registry-v2-01',
       'swap-helper', 'swap-helper-a', 'swap-helper-b', 'swap-helper-c',
+      // XYK (also at this address per Bitflow docs)
+      'sip-010-trait-ft-standard-v-1-1', 'xyk-pool-trait-v-1-1',
+      'token-stx-v-1-1', 'xyk-core-v-1-1', 'xyk-pool-stx-aeusdc-v-1-1',
     ]),
     'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1': new Set([
       'univ2-core', 'univ2-router', 'univ2-library', 'univ2-share-fee-to',
       'wrapper-velar-v-1-2',
     ]),
+    [BITFLOW_DEPLOYER]: new Set([
+      // StableSwap
+      'stableswap-stx-ststx-v-1-2', 'stableswap-usda-susdt-v-1-2',
+      'stableswap-aeusdc-susdt-v-1-2', 'stableswap-usda-aeusdc-v-1-2',
+      'stableswap-usda-aeusdc-v-1-4', 'stableswap-abtc-xbtc-v-1-2',
+      // Earn
+      'earn-stx-ststx-v-1-2', 'earn-usda-susdt-v-1-3', 'earn-aeusdc-susdt-v-1-3',
+      'earn-usda-aeusdc-v-1-3', 'earn-usda-aeusdc-v-1-5', 'earn-abtc-xbtc-v-1-3',
+      // LP Tokens
+      'stx-ststx-lp-token-v-1-2', 'usda-susdt-lp-token-v-1-2',
+      'aeusdc-susdt-lp-token-v-1-2', 'usda-aeusdc-lp-token-v-1-2',
+      'usda-aeusdc-lp-token-v-1-4', 'abtc-xbtc-lp-token-v-1-2',
+      // Routers
+      'router-stx-ststx-bitflow-arkadiko-v-1-1', 'router-stx-ststx-bitflow-velar-v-1-2',
+      'router-stx-ststx-bitflow-alex-v-1-1', 'router-stx-ststx-bitflow-alex-v-1-2',
+      'router-stx-ststx-bitflow-alex-v-2-1', 'router-stx-ststx-bitflow-xyk-v-1-1',
+      'router-stx-usda-arkadiko-alex-v-1-1', 'router-xyk-arkadiko-v-1-1',
+      'router-xyk-velar-v-1-1', 'router-xyk-alex-v-1-1', 'router-xyk-alex-v-1-2',
+      'router-velar-alex-v-1-1', 'router-velar-alex-v-1-2',
+      // Wrappers
+      'wrapper-velar-v-1-1', 'wrapper-velar-multihop-v-1-1',
+      'wrapper-alex-v-2-1', 'wrapper-arkadiko-v-1-1',
+      // Additional
+      'sip-010-trait-ft-standard', 'lp-trait',
+      'arkadiko-swap-quotes-v-1-1', 'usda-aeusdc-cycle-rewards-helper-v-1-4',
+      'usda-aeusdc-migration-helper-v-1-1', 'usda-aeusdc-migration-setup-v-1-1',
+      'usda-aeusdc-migration-setup-v-1-2',
+    ]),
   };
 
   const isValidMainnetContract = (contractStr: string): boolean => {
     if (!contractStr?.includes('.')) return false;
+    // Full contract override takes priority
+    if (FULL_CONTRACT_OVERRIDES[contractStr]) return true;
     const [addr, name] = contractStr.split('.');
     const resolved = MAINNET_CONTRACT_MAP[addr] || addr;
-    // If it's still a simnet address after mapping, it's invalid
+    // If it's still a simnet/testnet address after mapping, it's invalid
     if (resolved.startsWith('SM') || resolved.startsWith('ST')) return false;
     // If we have a known contract list for this deployer, validate the name
     const known = KNOWN_MAINNET_CONTRACTS[resolved];
@@ -188,12 +284,22 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const [contractAddress, contractName] = swapData.contract.split('.');
 
-    // Map known simnet/testnet DEX addresses to their mainnet equivalents.
-    // Defined at the top of this function — referenced here for address resolution.
+    // Step 1: check full contract override (e.g. wrapper-arkadiko-v-1-2 → wrapper-arkadiko-v-1-1 at Bitflow deployer)
+    const fullKey = `${contractAddress}.${contractName}`;
+    let resolvedContractAddress: string;
+    let resolvedContractName: string;
 
-    const resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
+    if (FULL_CONTRACT_OVERRIDES[fullKey]) {
+      const [overrideAddr, overrideName] = FULL_CONTRACT_OVERRIDES[fullKey].split('.');
+      resolvedContractAddress = overrideAddr;
+      resolvedContractName = overrideName;
+    } else {
+      // Step 2: fall back to deployer-level address remap
+      resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
+      resolvedContractName = contractName;
+    }
 
-    // Guard: if still SM*/ST* after mapping, we don't have a mainnet equivalent yet
+    // Guard: if still SM*/ST* after both mappings, we don't have a mainnet equivalent yet
     if (resolvedContractAddress.startsWith('SM') || resolvedContractAddress.startsWith('ST')) {
       throw new Error(
         `Bitflow returned a non-mainnet contract: ${swapData.contract}. ` +
@@ -261,7 +367,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
       originalContract: swapData.contract,
-      resolvedContract: `${resolvedContractAddress}.${contractName}`,
+      resolvedContract: `${resolvedContractAddress}.${resolvedContractName}`,
       fn,
       order,
       argsCount: functionArgs.length,
@@ -269,7 +375,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     txOptions = {
       contractAddress: resolvedContractAddress,
-      contractName,
+      contractName: resolvedContractName,
       functionName: fn,
       functionArgs,
     };
