@@ -32,7 +32,7 @@ export interface BitflowGaslessSwapParams {
 }
 
 export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams): Promise<string> {
-  const { userAddress, userPublicKey, tokenIn, tokenInId, tokenOut, tokenOutId, amountIn, feeToken, onProgress } = params;
+  const { userAddress, userPublicKey, tokenInId, tokenOutId, amountIn, feeToken, onProgress } = params;
   
   const velumx = getVelumXClient();
   const config = getConfig();
@@ -86,10 +86,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
   } catch (e) { console.warn('Failed to fetch nonce:', e); }
 
-  // 3. Serialize payload for VelumX Executor (Bitflow v2)
+  // 3. Serialize payload for VelumX Executor (Bitflow v2) — used by USER_PAYS path only
   onProgress?.('Preparing transaction payload...');
-  
-  // Pack the arguments into a single tuple buffer that the executor expects
+
+  // Pool ID and amounts come from the route's swapData parameters
+  const routeSwapData = (bestRoute as any).swapData as { contract: string; function: string; parameters: Record<string, any> };
+  const routeParams = routeSwapData?.parameters || {};
+  const poolId: number = routeParams['id'] || routeParams['pool-id'] || 0;
+
   const payloadCv = tupleCV({
     'pool-id': uintCV(poolId),
     'amount-in': uintCV(amountInRaw),
