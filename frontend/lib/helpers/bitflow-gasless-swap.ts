@@ -47,7 +47,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const minAmountOutRaw = Math.floor(bestRoute.quote * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
 
   // Helper: build a contractPrincipalCV from a "ADDR.name" string
-  const toContractCV = (principal: string) => {
+  const toContractCV = (principal: string | undefined) => {
+    if (!principal || !principal.includes('.')) {
+      throw new Error(`Invalid contract principal: "${principal}". Expected "ADDRESS.name" format.`);
+    }
     const [addr, name] = principal.split('.');
     return contractPrincipalCV(addr, name);
   };
@@ -118,6 +121,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     // DEVELOPER_SPONSORS: Build the Bitflow contract call directly from bestRoute.swapData.
     // We do NOT call getSwapParams() because it fetches the contract interface from the
     // Bitflow node which may return simnet addresses for some token pairs.
+    console.log('[Bitflow] bestRoute:', JSON.stringify(bestRoute, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2));
+
     const swapData = (bestRoute as any).swapData as {
       contract: string;
       function: string;
@@ -125,7 +130,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     };
 
     if (!swapData?.contract || !swapData?.function) {
-      throw new Error('Bitflow route is missing swapData contract/function. Cannot build transaction.');
+      throw new Error(`Bitflow route is missing swapData contract/function. swapData: ${JSON.stringify(swapData)}`);
     }
 
     const [contractAddress, contractName] = swapData.contract.split('.');
