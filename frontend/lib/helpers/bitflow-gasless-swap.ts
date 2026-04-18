@@ -64,7 +64,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   // Step 1 — deployer-level address remapping (catches XYK core contracts)
   const MAINNET_CONTRACT_MAP: Record<string, string> = {
-    'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM', // ALEX AMM / XYK deployer
+    // SM1793... is the simnet XYK/router deployer. Most contracts under this address
+    // belong at the Bitflow deployer on mainnet. ALEX-specific contracts are handled
+    // explicitly in FULL_CONTRACT_OVERRIDES below.
+    'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M', // Bitflow deployer (default)
     'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1', // Velar deployer
   };
 
@@ -95,13 +98,18 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-xyk-alex-v-1-2`]:                  `${BITFLOW_DEPLOYER}.router-xyk-alex-v-1-2`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-velar-alex-v-1-1`]:                `${BITFLOW_DEPLOYER}.router-velar-alex-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-velar-alex-v-1-2`]:                `${BITFLOW_DEPLOYER}.router-velar-alex-v-1-2`,
-    // ── Wrapper contracts ─────────────────────────────────────────────────────
+    // ── XYK contracts — deployed at ALEX address, NOT Bitflow deployer ───────
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.sip-010-trait-ft-standard-v-1-1`]: `SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.sip-010-trait-ft-standard-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.xyk-pool-trait-v-1-1`]:            `SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.xyk-pool-trait-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.token-stx-v-1-1`]:                 `SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-stx-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.xyk-core-v-1-1`]:                  `SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.xyk-core-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.xyk-pool-stx-aeusdc-v-1-1`]:       `SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.xyk-pool-stx-aeusdc-v-1-1`,
+    // ── Wrapper contracts — deployed at Bitflow deployer ─────────────────────
     // Note: the API may return v-1-2 but only v-1-1 is deployed on mainnet.
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-1`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-2`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,   // v-1-2 not on mainnet → use v-1-1
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-multihop-v-1-1`]: `${BITFLOW_DEPLOYER}.wrapper-velar-multihop-v-1-1`,
-    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,
-    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-2`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`, // v-1-2 not on mainnet → use v-1-1
     // ── Velar deployer overrides (SM2* → SP1Y5*) — Velar-native contracts ────
     // wrapper-velar-v-1-2 is deployed at the Velar address per Bitflow docs
