@@ -7,7 +7,8 @@ import {
   noneCV,
   bufferCV,
   PostConditionMode,
-  makeUnsignedContractCall
+  makeUnsignedContractCall,
+  Cl
 } from '@stacks/transactions';
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
@@ -127,14 +128,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       contractName,
       functionName: swapParams.functionName,
       functionArgs: [
-        uintCV(poolId),
-        principalCV(tokenInPrincipal),
-        principalCV(tokenOutPrincipal),
-        principalCV(token0),
-        principalCV(token1),
-        uintCV(amountInRaw),
-        uintCV(minAmountOutRaw),
-        principalCV(userAddress)
+        Cl.uint(poolId),
+        Cl.principal(tokenInPrincipal),
+        Cl.principal(tokenOutPrincipal),
+        Cl.principal(token0),
+        Cl.principal(token1),
+        Cl.uint(amountInRaw),
+        Cl.uint(minAmountOutRaw),
+        Cl.principal(userAddress)
       ],
       sponsored: true,
       network: 'mainnet'
@@ -163,7 +164,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     nonce,
     fee: 0n,
     postConditionMode: PostConditionMode.Allow,
-    postConditions: swapParams.postConditions || [],
+    postConditions: [], // Temporarily empty to isolate serialization error
   });
 
   const txHex = transaction.serialize();
