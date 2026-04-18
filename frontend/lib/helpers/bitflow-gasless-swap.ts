@@ -309,7 +309,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const p = swapData.parameters;
     const fn = swapData.function;
-    const order: string[] = p['order'] || [];
 
     // Resolve any simnet token addresses to mainnet equivalents
     const resolveTokenAddr = (addr: string): string => MAINNET_CONTRACT_MAP[addr] || addr;
@@ -330,46 +329,59 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     // Stacks address prefixes — SP/ST = standard principal, SM = simnet
     const isStacksAddress = (v: string) => /^S[MPT][A-Z0-9]{30,}$/.test(v);
 
-    // Build args from the order array
-    const functionArgs: any[] = order.map((key: string) => {
-      const val = p[key];
-
+    const buildClarityArg = (key: string, val: any): any => {
       // Contract principal: "ADDR.name"
       if (typeof val === 'string' && val.includes('.')) {
         return toContractCV(resolveTokenPrincipal(val));
       }
-
-      // Standard principal: bare Stacks address (e.g. provider field)
+      // Standard principal: bare Stacks address
       if (typeof val === 'string' && isStacksAddress(val)) {
-        const resolved = resolveTokenAddr(val);
-        return standardPrincipalCV(resolved);
+        return standardPrincipalCV(resolveTokenAddr(val));
       }
-
       // Uint fields
       if (UINT_KEYS.has(key)) {
-        if (val === undefined || val === null) {
-          return uintCV(0n);
-        }
-        // Apply slippage to min-out values
-        if (MIN_OUT_KEYS.has(key)) {
-          return uintCV(BigInt(Math.floor(Number(val) * 0.99)));
-        }
+        if (val === undefined || val === null) return uintCV(0n);
+        if (MIN_OUT_KEYS.has(key)) return uintCV(BigInt(Math.floor(Number(val) * 0.99)));
         return uintCV(BigInt(val));
       }
-
-      // Fallback: if it looks like a number, treat as uint
+      // Fallback numeric
       if (val !== undefined && val !== null && !isNaN(Number(val))) {
         return uintCV(BigInt(val));
       }
-
       throw new Error(`Cannot convert parameter "${key}" = "${val}" to Clarity value`);
+    };
+
+    // Fetch the actual mainnet ABI for the resolved contract so we use the correct
+    // arg count and order — the SDK's swapData.parameters['order'] reflects the
+    // simnet contract which may differ (e.g. extra args that don't exist on mainnet).
+    let abiOrder: string[];
+    try {
+      const abiRes = await fetch(
+        `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
+      );
+      if (!abiRes.ok) throw new Error(`ABI fetch failed: ${abiRes.status}`);
+      const abi = await abiRes.json();
+      const fnDef = (abi.functions as any[]).find((f: any) => f.name === fn);
+      if (!fnDef) throw new Error(`Function ${fn} not found in ABI`);
+      abiOrder = fnDef.args.map((a: any) => a.name);
+      console.log('[Bitflow] ABI arg order for', `${resolvedContractName}.${fn}`, ':', abiOrder);
+    } catch (abiErr) {
+      // Fallback to SDK order if ABI fetch fails
+      console.warn('[Bitflow] ABI fetch failed, falling back to SDK order:', abiErr);
+      abiOrder = p['order'] || [];
+    }
+
+    const functionArgs: any[] = abiOrder.map((key: string) => {
+      // Try exact key first, then common aliases
+      const val = p[key] ?? p[`${key}-trait`] ?? p[key.replace('-trait', '')];
+      return buildClarityArg(key, val);
     });
 
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
       originalContract: swapData.contract,
       resolvedContract: `${resolvedContractAddress}.${resolvedContractName}`,
       fn,
-      order,
+      abiOrder,
       argsCount: functionArgs.length,
     });
 
