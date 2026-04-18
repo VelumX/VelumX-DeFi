@@ -1,32 +1,27 @@
 import { BitflowSDK } from '@bitflowlabs/core-sdk';
 
 /**
- * Shared Bitflow SDK configuration — mainnet endpoints
+ * Bitflow SDK configuration.
+ * BITFLOW_API_HOST is their single public gateway (the "test" in the name is
+ * just the gateway identifier — it is the production endpoint per Bitflow docs).
+ * Routes from this API may contain simnet contract addresses for some DEX
+ * integrations; these are mapped to mainnet equivalents in bitflow-gasless-swap.ts.
  */
 export const BITFLOW_CONFIG = {
-  BITFLOW_API_HOST: 'https://api.bitflowapis.finance',
+  BITFLOW_API_HOST: 'https://bitflowsdk-api-test-7owjsmt8.uk.gateway.dev',
   READONLY_CALL_API_HOST: 'https://node.bitflowapis.finance',
-  BITFLOW_PROVIDER_ADDRESS: 'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE', // VelumX mainnet address
+  BITFLOW_PROVIDER_ADDRESS: 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV',
 };
 
-/**
- * Singleton Bitflow SDK instance
- * Always initialized with explicit mainnet config to prevent the SDK's
- * test-endpoint defaults from being used.
- */
 let bitflowInstance: BitflowSDK | null = null;
 
 export function getBitflowSDK(): BitflowSDK {
   if (!bitflowInstance) {
     bitflowInstance = new BitflowSDK(BITFLOW_CONFIG);
-    console.log('[Bitflow] SDK initialized with config:', BITFLOW_CONFIG);
   }
   return bitflowInstance;
 }
 
-/**
- * Force a fresh SDK instance — call this if you suspect stale config
- */
 export function resetBitflowSDK(): void {
   bitflowInstance = null;
 }

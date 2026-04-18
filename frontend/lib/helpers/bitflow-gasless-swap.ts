@@ -41,8 +41,60 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // 1. Get Bitflow Route & Quote
   onProgress?.('Fetching quote from Bitflow...');
   const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, Number(amountIn));
-  const bestRoute = quoteResult.bestRoute;
+
+  // Known simnet→mainnet deployer address mappings.
+  // The Bitflow API returns simnet addresses for some DEX integrations.
+  const MAINNET_CONTRACT_MAP: Record<string, string> = {
+    'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM', // ALEX AMM
+    'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1', // Velar
+  };
+
+  // Known mainnet contract names per deployer — used to validate a route is executable on mainnet.
+  // If a simnet address maps to a mainnet deployer but the contract name doesn't exist there,
+  // the route is skipped.
+  const KNOWN_MAINNET_CONTRACTS: Record<string, Set<string>> = {
+    'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM': new Set([
+      'amm-pool-v2-01', 'amm-vault-v2-01', 'amm-registry-v2-01',
+      'swap-helper', 'swap-helper-a', 'swap-helper-b', 'swap-helper-c',
+    ]),
+    'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1': new Set([
+      'univ2-core', 'univ2-router', 'univ2-library', 'univ2-share-fee-to',
+      'wrapper-velar-v-1-2',
+    ]),
+  };
+
+  const isValidMainnetContract = (contractStr: string): boolean => {
+    if (!contractStr?.includes('.')) return false;
+    const [addr, name] = contractStr.split('.');
+    const resolved = MAINNET_CONTRACT_MAP[addr] || addr;
+    // If it's still a simnet address after mapping, it's invalid
+    if (resolved.startsWith('SM') || resolved.startsWith('ST')) return false;
+    // If we have a known contract list for this deployer, validate the name
+    const known = KNOWN_MAINNET_CONTRACTS[resolved];
+    if (known) return known.has(name);
+    // Unknown deployer but mainnet address — allow it
+    return true;
+  };
+
+  // Pick the best route whose swapData contract resolves to a known mainnet contract.
+  // Fall back through allRoutes sorted by quote descending.
+  const sortedRoutes = [...(quoteResult.allRoutes || [])]
+    .filter(r => r.quote !== null && r.quote !== undefined)
+    .sort((a, b) => (b.quote as number) - (a.quote as number));
+
+  const bestRoute = sortedRoutes.find(r => {
+    const contract = (r as any).swapData?.contract || '';
+    return isValidMainnetContract(contract);
+  }) || quoteResult.bestRoute;
+
   if (!bestRoute || !bestRoute.quote) throw new Error('No swap route found on Bitflow');
+
+  console.log('[Bitflow] Selected route:', {
+    contract: (bestRoute as any).swapData?.contract,
+    fn: (bestRoute as any).swapData?.function,
+    quote: bestRoute.quote,
+    dexPath: (bestRoute as any).dexPath,
+  });
 
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
   const minAmountOutRaw = Math.floor(bestRoute.quote * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
@@ -137,14 +189,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const [contractAddress, contractName] = swapData.contract.split('.');
 
     // Map known simnet/testnet DEX addresses to their mainnet equivalents.
-    // The Bitflow API returns test addresses for some DEX integrations.
-    const MAINNET_CONTRACT_MAP: Record<string, string> = {
-      // ALEX AMM
-      'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM',
-      // Velar
-      'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1',
-      // Add more mappings as needed
-    };
+    // Defined at the top of this function — referenced here for address resolution.
 
     const resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
 
