@@ -339,8 +339,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // 6. Relayer co-signs + broadcasts
   onProgress?.('Broadcasting via VelumX...');
   const result = await velumx.sponsor(signedTxHex, {
-    feeToken: feeToken,
-    feeAmount: feeAmount,
+    feeToken: isDeveloperSponsoring ? undefined : feeToken,
+    feeAmount: isDeveloperSponsoring ? '0' : feeAmount,
     network: 'mainnet'
   });
 
