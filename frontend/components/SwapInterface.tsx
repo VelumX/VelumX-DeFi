@@ -233,7 +233,7 @@ export function SwapInterface() {
         })
         .filter(t => 
           t.symbol !== 'Unknown' && 
-          (t.address?.includes('.') || t.symbol === 'STX' || t.tokenId === 'token-stx')
+          (t.address?.includes('.') || t.symbol === 'STX' || t.tokenId?.startsWith('token-'))
         );
 
     const applyTokens = (mapped: Token[]) => {

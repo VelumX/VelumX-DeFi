@@ -160,33 +160,25 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     console.log('[Policy] Using USER_PAYS (Paymaster + Executor Call)');
   }
 
-  const transaction = await makeUnsignedContractCall({
-    ...txOptions,
-    publicKey,
-    nonce,
-    fee: 0n,
-    postConditionMode: PostConditionMode.Allow,
-    postConditions: [], // Temporarily empty to isolate serialization error
+  // 5. Request signature from wallet via @stacks/connect
+  onProgress?.('Waiting for wallet signature...');
+  
+  const signResult: any = await new Promise((resolve, reject) => {
+    request('stx_callContract', {
+      ...txOptions,
+      publicKey,
+      nonce: Number(nonce),
+      sponsored: true,
+      postConditionMode: PostConditionMode.Allow,
+      postConditions: [], // We'll re-enable these once the flow is stable
+      broadcast: false, // DON'T broadcast yet
+      onFinish: (data: any) => resolve(data),
+      onCancel: () => reject(new Error('Swap cancelled by user')),
+    } as any);
   });
 
-  const txHex = transaction.serialize();
-
-  // 5. Wallet signs WITHOUT broadcasting
-  onProgress?.('Waiting for wallet signature...');
-  let signedTxHex: string;
-  try {
-    const signResult = await request('stx_signTransaction', {
-      transaction: txHex,
-      broadcast: false,
-    });
-    signedTxHex = (signResult as any).transaction || (signResult as any).txHex;
-    if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
-  } catch (err: any) {
-    if (err?.message?.toLowerCase().includes('cancel') || err?.code === 4001) {
-      throw new Error('Swap cancelled by user');
-    }
-    throw err;
-  }
+  const signedTxHex = signResult.txRaw || signResult.transaction;
+  if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
 
   // 6. Relayer co-signs + broadcasts
   onProgress?.('Broadcasting via VelumX...');
