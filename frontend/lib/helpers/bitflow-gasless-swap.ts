@@ -15,6 +15,7 @@ import { getConfig } from '../config';
 import { QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '../bitflow';
 import { request } from '@stacks/connect';
+import { STACKS_MAINNET } from '@stacks/network';
 
 const bitflow = getBitflowSDK();
 
@@ -122,11 +123,12 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   if (isDeveloperSponsoring) {
     // DEVELOPER_SPONSORS: User pays nothing. Bypass VelumX contracts and call Bitflow directly.
     // The relayer will sponsor the STX gas via the /broadcast endpoint.
-    const [contractAddress, contractName] = swapParams.contractAddress.split('.');
+    const fullContract = swapParams.contractAddress || 'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.univ2-router';
+    const [contractAddress, contractName] = fullContract.split('.');
     txOptions = {
       contractAddress,
       contractName,
-      functionName: swapParams.functionName,
+      functionName: swapParams.functionName || 'swap-exact-tokens-for-tokens',
       functionArgs: [
         Cl.uint(poolId),
         Cl.principal(tokenInPrincipal),
@@ -138,7 +140,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         Cl.principal(userAddress)
       ],
       sponsored: true,
-      network: 'mainnet'
+      network: STACKS_MAINNET
     };
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)');
   } else {
