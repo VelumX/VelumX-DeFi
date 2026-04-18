@@ -283,11 +283,19 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           );
         }
 
-        // Use the SDK to build function args — it handles all Clarity type conversions,
-        // ABI fetching, and slippage correctly. We just patch the contract address.
+        // Use the SDK to build function args — patch the route's swapData.contract
+        // with the resolved mainnet address so getSwapParams fetches the correct ABI.
+        const patchedRoute = {
+          ...(candidateRoute as any).route || candidateRoute,
+          swapData: {
+            ...(candidateRoute as any).swapData,
+            contract: `${resolvedContractAddress}.${resolvedContractName}`,
+          },
+        };
+
         const swapParams = await bitflow.getSwapParams(
           {
-            route: (candidateRoute as any).route || candidateRoute,
+            route: patchedRoute,
             amount: Number(amountIn),
             tokenXDecimals: params.tokenInDecimals,
             tokenYDecimals: params.tokenOutDecimals,
