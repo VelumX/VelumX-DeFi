@@ -425,10 +425,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     validateWithAbi: false,
   });
 
-  // @stacks/transactions v7+ serialize() returns Uint8Array — convert to hex string
-  // for stx_signTransaction which expects a hex-encoded transaction.
-  const txBytes = unsignedTx.serialize();
-  const txHex = Buffer.from(txBytes).toString('hex');
+  // serialize() returns Uint8Array in @stacks/transactions v7+.
+  // stx_signTransaction accepts the raw Uint8Array directly (same as simple-gasless-swap.ts).
+  const txHex = unsignedTx.serialize();
+  console.log('[Bitflow] Built sponsored tx, length:', (txHex as any).length ?? (txHex as string).length);
 
   let signedTxHex: string;
   try {
