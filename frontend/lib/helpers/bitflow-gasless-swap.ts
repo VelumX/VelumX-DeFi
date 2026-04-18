@@ -125,6 +125,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     // The relayer will sponsor the STX gas via the /broadcast endpoint.
     // Use swapParams directly — functionArgs are already proper Clarity values from the SDK.
     const [contractAddress, contractName] = swapParams.contractAddress.split('.');
+
+    // Debug: log each arg to identify any undefined/malformed Clarity values
+    console.log('[DEVELOPER_SPONSORS] functionArgs:', swapParams.functionArgs.map((a: any, i: number) => ({
+      index: i,
+      type: a?.type,
+      value: typeof a?.value === 'bigint' ? a.value.toString() : a?.value,
+    })));
+
     txOptions = {
       contractAddress,
       contractName,
