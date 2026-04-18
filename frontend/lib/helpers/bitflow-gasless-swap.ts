@@ -123,26 +123,33 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   if (isDeveloperSponsoring) {
     // DEVELOPER_SPONSORS: User pays nothing. Call Bitflow directly using SDK-provided params.
     // The relayer will sponsor the STX gas via the /broadcast endpoint.
-    // Use swapParams directly — functionArgs are already proper Clarity values from the SDK.
     const [contractAddress, contractName] = swapParams.contractAddress.split('.');
 
-    // Debug: log each arg to identify any undefined/malformed Clarity values
-    console.log('[DEVELOPER_SPONSORS] functionArgs:', swapParams.functionArgs.map((a: any, i: number) => ({
-      index: i,
-      type: a?.type,
-      value: typeof a?.value === 'bigint' ? a.value.toString() : a?.value,
-    })));
+    // Validate: SM* prefix = simnet/testnet address, should never appear on mainnet
+    if (contractAddress.startsWith('SM') || contractAddress.startsWith('ST')) {
+      throw new Error(
+        `Bitflow SDK returned a non-mainnet contract address: ${swapParams.contractAddress}. ` +
+        `Check that the Bitflow SDK is configured for mainnet and token IDs are correct.`
+      );
+    }
+
+    // Validate all args are proper Clarity values — SDK may produce undefined for missing params
+    const rawArgs = swapParams.functionArgs as any[];
+    const badArgIndices = rawArgs.map((a, i) => a?.type === undefined ? i : -1).filter(i => i >= 0);
+    if (badArgIndices.length > 0) {
+      throw new Error(`Bitflow SDK returned invalid function arg(s) at index [${badArgIndices.join(', ')}] for ${swapParams.functionName}. Cannot build transaction.`);
+    }
 
     txOptions = {
       contractAddress,
       contractName,
       functionName: swapParams.functionName,
-      functionArgs: swapParams.functionArgs,
+      functionArgs: rawArgs,
     };
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
       contract: swapParams.contractAddress,
       fn: swapParams.functionName,
-      argsCount: swapParams.functionArgs.length,
+      argsCount: rawArgs.length,
     });
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
