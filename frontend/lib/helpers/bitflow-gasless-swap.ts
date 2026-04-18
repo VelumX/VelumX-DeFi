@@ -6,6 +6,7 @@ import {
   serializeCV,
   contractPrincipalCV,
   standardPrincipalCV,
+  listCV,
   PostConditionMode,
   makeUnsignedContractCall,
 } from '@stacks/transactions';
@@ -178,12 +179,15 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     .filter(r => r.quote !== null && r.quote !== undefined)
     .sort((a, b) => (b.quote as number) - (a.quote as number));
 
-  const bestRoute = sortedRoutes.find(r => {
+  const validRoutes = sortedRoutes.filter(r => {
     const contract = (r as any).swapData?.contract || '';
     return isValidMainnetContract(contract);
-  }) || quoteResult.bestRoute;
+  });
 
-  if (!bestRoute || !bestRoute.quote) throw new Error('No swap route found on Bitflow');
+  if (validRoutes.length === 0 && quoteResult.bestRoute) validRoutes.push(quoteResult.bestRoute);
+  if (validRoutes.length === 0) throw new Error('No swap route found on Bitflow');
+
+  const bestRoute = validRoutes[0];
 
   console.log('[Bitflow] Selected route:', {
     contract: (bestRoute as any).swapData?.contract,
@@ -193,7 +197,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   });
 
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
-  const minAmountOutRaw = Math.floor(bestRoute.quote * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
+  const minAmountOutRaw = Math.floor((bestRoute.quote ?? 0) * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
 
   // Helper: build a contractPrincipalCV from a "ADDR.name" string
   const toContractCV = (principal: string | undefined) => {
@@ -267,130 +271,157 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   let txOptions: any;
   
   if (isDeveloperSponsoring) {
-    // DEVELOPER_SPONSORS: Build the Bitflow contract call directly from bestRoute.swapData.
-    // We do NOT call getSwapParams() because it fetches the contract interface from the
-    // Bitflow node which may return simnet addresses for some token pairs.
-    console.log('[Bitflow] bestRoute:', JSON.stringify(bestRoute, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2));
+    // DEVELOPER_SPONSORS: Try each valid route in order until one builds successfully.
+    // Routes can fail if the contract doesn't exist on mainnet (ABI 404) or has
+    // unsupported parameter types. We skip those and try the next best route.
+    let lastError: Error | null = null;
 
-    const swapData = (bestRoute as any).swapData as {
-      contract: string;
-      function: string;
-      parameters: Record<string, any>;
-    };
+    for (const candidateRoute of validRoutes) {
+      try {
+        console.log('[Bitflow] Trying route:', (candidateRoute as any).swapData?.contract, (candidateRoute as any).swapData?.function);
 
-    if (!swapData?.contract || !swapData?.function) {
-      throw new Error(`Bitflow route is missing swapData contract/function. swapData: ${JSON.stringify(swapData)}`);
+        const swapData = (candidateRoute as any).swapData as {
+          contract: string;
+          function: string;
+          parameters: Record<string, any>;
+        };
+
+        if (!swapData?.contract || !swapData?.function) {
+          throw new Error(`Bitflow route is missing swapData contract/function. swapData: ${JSON.stringify(swapData)}`);
+        }
+
+        const [contractAddress, contractName] = swapData.contract.split('.');
+
+        // Step 1: check full contract override (e.g. wrapper-arkadiko-v-1-2 → wrapper-arkadiko-v-1-1 at Bitflow deployer)
+        const fullKey = `${contractAddress}.${contractName}`;
+        let resolvedContractAddress: string;
+        let resolvedContractName: string;
+
+        if (FULL_CONTRACT_OVERRIDES[fullKey]) {
+          const [overrideAddr, overrideName] = FULL_CONTRACT_OVERRIDES[fullKey].split('.');
+          resolvedContractAddress = overrideAddr;
+          resolvedContractName = overrideName;
+        } else {
+          // Step 2: fall back to deployer-level address remap
+          resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
+          resolvedContractName = contractName;
+        }
+
+        // Guard: if still SM*/ST* after both mappings, we don't have a mainnet equivalent yet
+        if (resolvedContractAddress.startsWith('SM') || resolvedContractAddress.startsWith('ST')) {
+          throw new Error(
+            `Bitflow returned a non-mainnet contract: ${swapData.contract}. ` +
+            `Verify the token IDs passed to the SDK are valid mainnet Bitflow token IDs.`
+          );
+        }
+
+        const p = swapData.parameters;
+        const fn = swapData.function;
+
+        // Resolve any simnet token addresses to mainnet equivalents
+        const resolveTokenAddr = (addr: string): string => MAINNET_CONTRACT_MAP[addr] || addr;
+        const resolveTokenPrincipal = (principal: string): string => {
+          if (!principal?.includes('.')) return principal;
+          const [addr, name] = principal.split('.');
+          return `${resolveTokenAddr(addr)}.${name}`;
+        };
+
+        // Min-out keys — apply 1% slippage to whichever is present
+        const MIN_OUT_KEYS = new Set(['min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min', 'min-x-amount', 'min-y-amount']);
+        // Keys that are uint amounts (not principals)
+        const UINT_KEYS = new Set(['id', 'factor', 'factor-x', 'factor-y', 'factor-z', 'factor-w',
+          'dx', 'dy', 'amt-in', 'amt-out', 'amount', 'x-amount', 'y-amount',
+          'min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min',
+          'min-x-amount', 'min-y-amount', 'min-dx']);
+
+        // Stacks address prefixes — SP/ST = standard principal, SM = simnet
+        const isStacksAddress = (v: string) => /^S[MPT][A-Z0-9]{30,}$/.test(v);
+
+        const buildClarityArg = (key: string, val: any): any => {
+          // List of contract principals (e.g. stableswap-tokens: [{addr, name}, ...] or ["ADDR.name", ...])
+          if (Array.isArray(val)) {
+            return listCV(val.map((item: any) => {
+              if (typeof item === 'string' && item.includes('.')) {
+                return toContractCV(resolveTokenPrincipal(item));
+              }
+              const addr = item.address || item.contractAddress || item.addr || '';
+              const name = item.name || item.contractName || '';
+              if (addr && name) {
+                return contractPrincipalCV(resolveTokenAddr(addr), name);
+              }
+              throw new Error(`Cannot convert list item in "${key}": ${JSON.stringify(item)}`);
+            }));
+          }
+          // Contract principal: "ADDR.name"
+          if (typeof val === 'string' && val.includes('.')) {
+            return toContractCV(resolveTokenPrincipal(val));
+          }
+          // Standard principal: bare Stacks address
+          if (typeof val === 'string' && isStacksAddress(val)) {
+            return standardPrincipalCV(resolveTokenAddr(val));
+          }
+          // Uint fields
+          if (UINT_KEYS.has(key)) {
+            if (val === undefined || val === null) return uintCV(0n);
+            if (MIN_OUT_KEYS.has(key)) return uintCV(BigInt(Math.floor(Number(val) * 0.99)));
+            return uintCV(BigInt(val));
+          }
+          // Fallback numeric
+          if (val !== undefined && val !== null && !isNaN(Number(val))) {
+            return uintCV(BigInt(val));
+          }
+          throw new Error(`Cannot convert parameter "${key}" = "${JSON.stringify(val)}" to Clarity value`);
+        };
+
+        // Fetch the actual mainnet ABI — if 404, contract doesn't exist, skip this route
+        const abiRes = await fetch(
+          `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
+        );
+        if (!abiRes.ok) {
+          throw new Error(
+            `Contract ${resolvedContractAddress}.${resolvedContractName} not found on mainnet (${abiRes.status}). Route skipped.`
+          );
+        }
+        const abi = await abiRes.json();
+        const fnDef = (abi.functions as any[]).find((f: any) => f.name === fn);
+        if (!fnDef) {
+          throw new Error(`Function "${fn}" not found in ABI of ${resolvedContractName}. Route skipped.`);
+        }
+        const abiOrder: string[] = fnDef.args.map((a: any) => a.name);
+        console.log('[Bitflow] ABI arg order for', `${resolvedContractName}.${fn}`, ':', abiOrder);
+
+        const functionArgs: any[] = abiOrder.map((key: string) => {
+          const val = p[key] ?? p[`${key}-trait`] ?? p[key.replace('-trait', '')];
+          return buildClarityArg(key, val);
+        });
+
+        console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
+          originalContract: swapData.contract,
+          resolvedContract: `${resolvedContractAddress}.${resolvedContractName}`,
+          fn,
+          abiOrder,
+          argsCount: functionArgs.length,
+        });
+
+        txOptions = {
+          contractAddress: resolvedContractAddress,
+          contractName: resolvedContractName,
+          functionName: fn,
+          functionArgs,
+        };
+
+        // Successfully built txOptions — stop trying routes
+        break;
+      } catch (routeErr: any) {
+        console.warn('[Bitflow] Route failed, trying next:', routeErr.message);
+        lastError = routeErr;
+        txOptions = null;
+      }
     }
 
-    const [contractAddress, contractName] = swapData.contract.split('.');
-
-    // Step 1: check full contract override (e.g. wrapper-arkadiko-v-1-2 → wrapper-arkadiko-v-1-1 at Bitflow deployer)
-    const fullKey = `${contractAddress}.${contractName}`;
-    let resolvedContractAddress: string;
-    let resolvedContractName: string;
-
-    if (FULL_CONTRACT_OVERRIDES[fullKey]) {
-      const [overrideAddr, overrideName] = FULL_CONTRACT_OVERRIDES[fullKey].split('.');
-      resolvedContractAddress = overrideAddr;
-      resolvedContractName = overrideName;
-    } else {
-      // Step 2: fall back to deployer-level address remap
-      resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
-      resolvedContractName = contractName;
+    if (!txOptions) {
+      throw new Error(`All Bitflow routes failed. Last error: ${lastError?.message}`);
     }
-
-    // Guard: if still SM*/ST* after both mappings, we don't have a mainnet equivalent yet
-    if (resolvedContractAddress.startsWith('SM') || resolvedContractAddress.startsWith('ST')) {
-      throw new Error(
-        `Bitflow returned a non-mainnet contract: ${swapData.contract}. ` +
-        `Verify the token IDs passed to the SDK are valid mainnet Bitflow token IDs.`
-      );
-    }
-
-    const p = swapData.parameters;
-    const fn = swapData.function;
-
-    // Resolve any simnet token addresses to mainnet equivalents
-    const resolveTokenAddr = (addr: string): string => MAINNET_CONTRACT_MAP[addr] || addr;
-    const resolveTokenPrincipal = (principal: string): string => {
-      if (!principal?.includes('.')) return principal;
-      const [addr, name] = principal.split('.');
-      return `${resolveTokenAddr(addr)}.${name}`;
-    };
-
-    // Min-out keys — apply 1% slippage to whichever is present
-    const MIN_OUT_KEYS = new Set(['min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min', 'min-x-amount', 'min-y-amount']);
-    // Keys that are uint amounts (not principals)
-    const UINT_KEYS = new Set(['id', 'factor', 'factor-x', 'factor-y', 'factor-z', 'factor-w',
-      'dx', 'dy', 'amt-in', 'amt-out', 'amount', 'x-amount', 'y-amount',
-      'min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min',
-      'min-x-amount', 'min-y-amount', 'min-dx']);
-
-    // Stacks address prefixes — SP/ST = standard principal, SM = simnet
-    const isStacksAddress = (v: string) => /^S[MPT][A-Z0-9]{30,}$/.test(v);
-
-    const buildClarityArg = (key: string, val: any): any => {
-      // Contract principal: "ADDR.name"
-      if (typeof val === 'string' && val.includes('.')) {
-        return toContractCV(resolveTokenPrincipal(val));
-      }
-      // Standard principal: bare Stacks address
-      if (typeof val === 'string' && isStacksAddress(val)) {
-        return standardPrincipalCV(resolveTokenAddr(val));
-      }
-      // Uint fields
-      if (UINT_KEYS.has(key)) {
-        if (val === undefined || val === null) return uintCV(0n);
-        if (MIN_OUT_KEYS.has(key)) return uintCV(BigInt(Math.floor(Number(val) * 0.99)));
-        return uintCV(BigInt(val));
-      }
-      // Fallback numeric
-      if (val !== undefined && val !== null && !isNaN(Number(val))) {
-        return uintCV(BigInt(val));
-      }
-      throw new Error(`Cannot convert parameter "${key}" = "${val}" to Clarity value`);
-    };
-
-    // Fetch the actual mainnet ABI for the resolved contract so we use the correct
-    // arg count and order — the SDK's swapData.parameters['order'] reflects the
-    // simnet contract which may differ (e.g. extra args that don't exist on mainnet).
-    let abiOrder: string[];
-    try {
-      const abiRes = await fetch(
-        `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
-      );
-      if (!abiRes.ok) throw new Error(`ABI fetch failed: ${abiRes.status}`);
-      const abi = await abiRes.json();
-      const fnDef = (abi.functions as any[]).find((f: any) => f.name === fn);
-      if (!fnDef) throw new Error(`Function ${fn} not found in ABI`);
-      abiOrder = fnDef.args.map((a: any) => a.name);
-      console.log('[Bitflow] ABI arg order for', `${resolvedContractName}.${fn}`, ':', abiOrder);
-    } catch (abiErr) {
-      // Fallback to SDK order if ABI fetch fails
-      console.warn('[Bitflow] ABI fetch failed, falling back to SDK order:', abiErr);
-      abiOrder = p['order'] || [];
-    }
-
-    const functionArgs: any[] = abiOrder.map((key: string) => {
-      // Try exact key first, then common aliases
-      const val = p[key] ?? p[`${key}-trait`] ?? p[key.replace('-trait', '')];
-      return buildClarityArg(key, val);
-    });
-
-    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
-      originalContract: swapData.contract,
-      resolvedContract: `${resolvedContractAddress}.${resolvedContractName}`,
-      fn,
-      abiOrder,
-      argsCount: functionArgs.length,
-    });
-
-    txOptions = {
-      contractAddress: resolvedContractAddress,
-      contractName: resolvedContractName,
-      functionName: fn,
-      functionArgs,
-    };
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
     // Extract token principals from the route for the executor trait-forwarding args.
