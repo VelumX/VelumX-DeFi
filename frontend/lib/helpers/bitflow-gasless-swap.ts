@@ -109,8 +109,13 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-1`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-v-1-2`]:          `${BITFLOW_DEPLOYER}.wrapper-velar-v-1-1`,   // v-1-2 not on mainnet → use v-1-1
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-multihop-v-1-1`]: `${BITFLOW_DEPLOYER}.wrapper-velar-multihop-v-1-1`,
-    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-alex-v-2-1`]:           `${BITFLOW_DEPLOYER}.wrapper-alex-v-2-1`,    
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-1`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`,
     [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-arkadiko-v-1-2`]:       `${BITFLOW_DEPLOYER}.wrapper-arkadiko-v-1-1`, // v-1-2 not on mainnet → use v-1-1
+    // wrapper-velar-path-v-1-2 — new Velar path variant, map to deployed multihop wrapper
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.wrapper-velar-path-v-1-2`]:     `${BITFLOW_DEPLOYER}.wrapper-velar-multihop-v-1-1`,
+    // router-stableswap-xyk-v-1-3 — confirmed deployed at Bitflow deployer (verified via Hiro API)
+    [`SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR.router-stableswap-xyk-v-1-3`]:  `${BITFLOW_DEPLOYER}.router-stableswap-xyk-v-1-3`,
     // ── Velar deployer overrides (SM2* → SP1Y5*) — Velar-native contracts ────
     // wrapper-velar-v-1-2 is deployed at the Velar address per Bitflow docs
     [`SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT.wrapper-velar-v-1-2`]:          `SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.wrapper-velar-v-1-2`,
@@ -155,6 +160,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       'router-stx-usda-arkadiko-alex-v-1-1', 'router-xyk-arkadiko-v-1-1',
       'router-xyk-velar-v-1-1', 'router-xyk-alex-v-1-1', 'router-xyk-alex-v-1-2',
       'router-velar-alex-v-1-1', 'router-velar-alex-v-1-2',
+      // Newer routers (confirmed deployed)
+      'router-stableswap-xyk-v-1-3',
       // Wrappers
       'wrapper-velar-v-1-1', 'wrapper-velar-multihop-v-1-1',
       'wrapper-alex-v-2-1', 'wrapper-arkadiko-v-1-1',
