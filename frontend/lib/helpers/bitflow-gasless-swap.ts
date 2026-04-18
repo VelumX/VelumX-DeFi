@@ -1,10 +1,12 @@
 import { 
-  uintCV, 
+  uintCV,
+  someCV,
+  noneCV,
   tupleCV,
   serializeCV,
+  contractPrincipalCV,
   PostConditionMode,
   makeUnsignedContractCall,
-  Cl
 } from '@stacks/transactions';
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
@@ -41,30 +43,18 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const bestRoute = quoteResult.bestRoute;
   if (!bestRoute || !bestRoute.quote) throw new Error('No swap route found on Bitflow');
 
-  const swapParams = await bitflow.getSwapParams({
-    route: bestRoute.route,
-    amount: Number(amountIn),
-    tokenXDecimals: params.tokenInDecimals,
-    tokenYDecimals: params.tokenOutDecimals,
-  }, userAddress, 0.01);
+  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
+  const minAmountOutRaw = Math.floor(bestRoute.quote * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
 
-  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals)); 
-  const minAmountOutRaw = Math.floor(bestRoute.quote * 0.98 * Math.pow(10, params.tokenOutDecimals)); // 2% slippage
+  // Helper: build a contractPrincipalCV from a "ADDR.name" string
+  const toContractCV = (principal: string) => {
+    const [addr, name] = principal.split('.');
+    return contractPrincipalCV(addr, name);
+  };
 
-  // Extract pool details for Trait-Forwarding (v2 uses univ2-router logic)
-  // Use 'any' to bypass SDK type mismatches and handle different route structures
-  const routeData = bestRoute as any;
-  const routeStep = routeData.route?.steps?.[0] || routeData.steps?.[0] || routeData;
-  
-  // Normalization helper for principals (handles STX -> wSTX mapping)
-  const WSTX_MAINNET = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx';
-  const normalize = (p: string) => (p === 'STX' || p === 'token-stx' || !p.includes('.')) ? WSTX_MAINNET : p;
-
-  const poolId = routeStep.poolId || routeStep.swapData?.parameters?.['id'] || 0;
-  const token0 = normalize(routeStep.token0 || routeStep.tokenPath?.[0] || '');
-  const token1 = normalize(routeStep.token1 || routeStep.tokenPath?.[1] || '');
-  const tokenInPrincipal = normalize(routeStep.tokenIn || params.tokenIn);
-  const tokenOutPrincipal = normalize(routeStep.tokenOut || params.tokenOut);
+  // Helper: optional uint — someCV(uintCV(n)) if n is defined, else noneCV()
+  const toOptUint = (n: bigint | number | string | undefined) =>
+    n !== undefined && n !== null ? someCV(uintCV(n)) : noneCV();
 
   // 2. Estimate Fee & Get Relayer Address
   onProgress?.('Estimating gasless fee...');
@@ -121,38 +111,116 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   let txOptions: any;
   
   if (isDeveloperSponsoring) {
-    // DEVELOPER_SPONSORS: User pays nothing. Call Bitflow directly using SDK-provided params.
-    // The relayer will sponsor the STX gas via the /broadcast endpoint.
-    const [contractAddress, contractName] = swapParams.contractAddress.split('.');
+    // DEVELOPER_SPONSORS: Build the Bitflow contract call directly from bestRoute.swapData.
+    // We do NOT call getSwapParams() because it fetches the contract interface from the
+    // Bitflow node which may return simnet addresses for some token pairs.
+    const swapData = (bestRoute as any).swapData as {
+      contract: string;
+      function: string;
+      parameters: Record<string, any>;
+    };
 
-    // Validate: SM* prefix = simnet/testnet address, should never appear on mainnet
+    if (!swapData?.contract || !swapData?.function) {
+      throw new Error('Bitflow route is missing swapData contract/function. Cannot build transaction.');
+    }
+
+    const [contractAddress, contractName] = swapData.contract.split('.');
+
+    // Guard: SM*/ST* = simnet/testnet address
     if (contractAddress.startsWith('SM') || contractAddress.startsWith('ST')) {
       throw new Error(
-        `Bitflow SDK returned a non-mainnet contract address: ${swapParams.contractAddress}. ` +
-        `Check that the Bitflow SDK is configured for mainnet and token IDs are correct.`
+        `Bitflow returned a non-mainnet contract: ${swapData.contract}. ` +
+        `Verify the token IDs passed to the SDK are valid mainnet Bitflow token IDs.`
       );
     }
 
-    // Validate all args are proper Clarity values — SDK may produce undefined for missing params
-    const rawArgs = swapParams.functionArgs as any[];
-    const badArgIndices = rawArgs.map((a, i) => a?.type === undefined ? i : -1).filter(i => i >= 0);
-    if (badArgIndices.length > 0) {
-      throw new Error(`Bitflow SDK returned invalid function arg(s) at index [${badArgIndices.join(', ')}] for ${swapParams.functionName}. Cannot build transaction.`);
+    const p = swapData.parameters;
+    const fn = swapData.function;
+
+    // Apply slippage to min-received / min-dy / min-dz / min-dw
+    const applySlippage = (val: any) => {
+      if (val === undefined || val === null) return undefined;
+      return BigInt(Math.floor(Number(val) * 0.99)); // 1% slippage
+    };
+
+    let functionArgs: any[];
+
+    if (fn === 'swap-helper') {
+      // swap-helper(token-x-trait, token-y-trait, factor, dx, min-dy)
+      functionArgs = [
+        toContractCV(p['token-x-trait'] || p['token-x']),
+        toContractCV(p['token-y-trait'] || p['token-y']),
+        uintCV(BigInt(p['factor'])),
+        uintCV(BigInt(p['dx'] ?? amountInRaw)),
+        toOptUint(applySlippage(p['min-dy'])),
+      ];
+    } else if (fn === 'swap-helper-a') {
+      // swap-helper-a(token-x-trait, token-y-trait, token-z-trait, factor-x, factor-y, dx, min-dz)
+      functionArgs = [
+        toContractCV(p['token-x-trait'] || p['token-x']),
+        toContractCV(p['token-y-trait'] || p['token-y']),
+        toContractCV(p['token-z-trait'] || p['token-z']),
+        uintCV(BigInt(p['factor-x'])),
+        uintCV(BigInt(p['factor-y'])),
+        uintCV(BigInt(p['dx'] ?? amountInRaw)),
+        toOptUint(applySlippage(p['min-dz'])),
+      ];
+    } else if (fn === 'swap-helper-b') {
+      // swap-helper-b(token-x-trait, token-y-trait, token-z-trait, token-w-trait, factor-x, factor-y, factor-z, dx, min-dw)
+      functionArgs = [
+        toContractCV(p['token-x-trait'] || p['token-x']),
+        toContractCV(p['token-y-trait'] || p['token-y']),
+        toContractCV(p['token-z-trait'] || p['token-z']),
+        toContractCV(p['token-w-trait'] || p['token-w']),
+        uintCV(BigInt(p['factor-x'])),
+        uintCV(BigInt(p['factor-y'])),
+        uintCV(BigInt(p['factor-z'])),
+        uintCV(BigInt(p['dx'] ?? amountInRaw)),
+        toOptUint(applySlippage(p['min-dw'])),
+      ];
+    } else if (fn === 'swap-helper-c') {
+      // swap-helper-c(token-x, token-y, token-z, token-w, token-v, factor-x, factor-y, factor-z, factor-w, dx, min-dv)
+      functionArgs = [
+        toContractCV(p['token-x-trait'] || p['token-x']),
+        toContractCV(p['token-y-trait'] || p['token-y']),
+        toContractCV(p['token-z-trait'] || p['token-z']),
+        toContractCV(p['token-w-trait'] || p['token-w']),
+        toContractCV(p['token-v-trait'] || p['token-v']),
+        uintCV(BigInt(p['factor-x'])),
+        uintCV(BigInt(p['factor-y'])),
+        uintCV(BigInt(p['factor-z'])),
+        uintCV(BigInt(p['factor-w'])),
+        uintCV(BigInt(p['dx'] ?? amountInRaw)),
+        toOptUint(applySlippage(p['min-dv'])),
+      ];
+    } else {
+      throw new Error(`Unsupported Bitflow swap function: ${fn}`);
     }
 
     txOptions = {
       contractAddress,
       contractName,
-      functionName: swapParams.functionName,
-      functionArgs: rawArgs,
+      functionName: fn,
+      functionArgs,
     };
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
-      contract: swapParams.contractAddress,
-      fn: swapParams.functionName,
-      argsCount: rawArgs.length,
+      contract: swapData.contract,
+      fn,
+      argsCount: functionArgs.length,
     });
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
+    // Extract token principals from the route for the executor trait-forwarding args.
+    const swapData = (bestRoute as any).swapData as { contract: string; function: string; parameters: Record<string, any> };
+    const p = swapData?.parameters || {};
+    const WSTX = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx';
+    const resolveToken = (val: string | undefined) => (!val || !val.includes('.')) ? WSTX : val;
+
+    const tokenInPrincipal = resolveToken(p['token-x-trait'] || p['token-x'] || params.tokenIn);
+    const tokenOutPrincipal = resolveToken(p['token-y-trait'] || p['token-y'] || params.tokenOut);
+    const token2 = resolveToken(p['token-z-trait'] || p['token-z']);
+    const token3 = resolveToken(p['token-w-trait'] || p['token-w']);
+
     txOptions = velumx.getExecuteGenericOptions({
       executor: config.bitflowExecutorAddress,
       payload: serializedPayload,
@@ -162,8 +230,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       version: 'relayer-v1', // Maps to velumx-paymaster-1-1
       token1: tokenInPrincipal,
       token2: tokenOutPrincipal,
-      token3: token0,
-      token4: token1
+      token3: token2,
+      token4: token3,
     });
     console.log('[Policy] Using USER_PAYS (Paymaster + Executor Call)');
   }
