@@ -130,8 +130,20 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const [contractAddress, contractName] = swapData.contract.split('.');
 
-    // Guard: SM*/ST* = simnet/testnet address
-    if (contractAddress.startsWith('SM') || contractAddress.startsWith('ST')) {
+    // Map known simnet/testnet DEX addresses to their mainnet equivalents.
+    // The Bitflow API returns test addresses for some DEX integrations.
+    const MAINNET_CONTRACT_MAP: Record<string, string> = {
+      // ALEX AMM
+      'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM',
+      // Velar
+      'SM2MARAVW6BEJCD13YV2RHGYHQWT7TDDNMNRB1MVT': 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1',
+      // Add more mappings as needed
+    };
+
+    const resolvedContractAddress = MAINNET_CONTRACT_MAP[contractAddress] || contractAddress;
+
+    // Guard: if still SM*/ST* after mapping, we don't have a mainnet equivalent yet
+    if (resolvedContractAddress.startsWith('SM') || resolvedContractAddress.startsWith('ST')) {
       throw new Error(
         `Bitflow returned a non-mainnet contract: ${swapData.contract}. ` +
         `Verify the token IDs passed to the SDK are valid mainnet Bitflow token IDs.`
@@ -140,6 +152,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const p = swapData.parameters;
     const fn = swapData.function;
+
+    // Resolve any simnet token addresses to mainnet equivalents
+    const resolveTokenAddr = (addr: string): string => MAINNET_CONTRACT_MAP[addr] || addr;
+    const resolveTokenPrincipal = (principal: string): string => {
+      if (!principal?.includes('.')) return principal;
+      const [addr, name] = principal.split('.');
+      return `${resolveTokenAddr(addr)}.${name}`;
+    };
 
     // Apply slippage to min-received / min-dy / min-dz / min-dw
     const applySlippage = (val: any) => {
@@ -152,8 +172,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     if (fn === 'swap-helper') {
       // swap-helper(token-x-trait, token-y-trait, factor, dx, min-dy)
       functionArgs = [
-        toContractCV(p['token-x-trait'] || p['token-x']),
-        toContractCV(p['token-y-trait'] || p['token-y']),
+        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
+        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
         uintCV(BigInt(p['factor'])),
         uintCV(BigInt(p['dx'] ?? amountInRaw)),
         toOptUint(applySlippage(p['min-dy'])),
@@ -161,9 +181,9 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     } else if (fn === 'swap-helper-a') {
       // swap-helper-a(token-x-trait, token-y-trait, token-z-trait, factor-x, factor-y, dx, min-dz)
       functionArgs = [
-        toContractCV(p['token-x-trait'] || p['token-x']),
-        toContractCV(p['token-y-trait'] || p['token-y']),
-        toContractCV(p['token-z-trait'] || p['token-z']),
+        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
+        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
+        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
         uintCV(BigInt(p['factor-x'])),
         uintCV(BigInt(p['factor-y'])),
         uintCV(BigInt(p['dx'] ?? amountInRaw)),
@@ -172,10 +192,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     } else if (fn === 'swap-helper-b') {
       // swap-helper-b(token-x-trait, token-y-trait, token-z-trait, token-w-trait, factor-x, factor-y, factor-z, dx, min-dw)
       functionArgs = [
-        toContractCV(p['token-x-trait'] || p['token-x']),
-        toContractCV(p['token-y-trait'] || p['token-y']),
-        toContractCV(p['token-z-trait'] || p['token-z']),
-        toContractCV(p['token-w-trait'] || p['token-w']),
+        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
+        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
+        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
+        toContractCV(resolveTokenPrincipal(p['token-w-trait'] || p['token-w'])),
         uintCV(BigInt(p['factor-x'])),
         uintCV(BigInt(p['factor-y'])),
         uintCV(BigInt(p['factor-z'])),
@@ -185,11 +205,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     } else if (fn === 'swap-helper-c') {
       // swap-helper-c(token-x, token-y, token-z, token-w, token-v, factor-x, factor-y, factor-z, factor-w, dx, min-dv)
       functionArgs = [
-        toContractCV(p['token-x-trait'] || p['token-x']),
-        toContractCV(p['token-y-trait'] || p['token-y']),
-        toContractCV(p['token-z-trait'] || p['token-z']),
-        toContractCV(p['token-w-trait'] || p['token-w']),
-        toContractCV(p['token-v-trait'] || p['token-v']),
+        toContractCV(resolveTokenPrincipal(p['token-x-trait'] || p['token-x'])),
+        toContractCV(resolveTokenPrincipal(p['token-y-trait'] || p['token-y'])),
+        toContractCV(resolveTokenPrincipal(p['token-z-trait'] || p['token-z'])),
+        toContractCV(resolveTokenPrincipal(p['token-w-trait'] || p['token-w'])),
+        toContractCV(resolveTokenPrincipal(p['token-v-trait'] || p['token-v'])),
         uintCV(BigInt(p['factor-x'])),
         uintCV(BigInt(p['factor-y'])),
         uintCV(BigInt(p['factor-z'])),
@@ -202,13 +222,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
 
     txOptions = {
-      contractAddress,
+      contractAddress: resolvedContractAddress,
       contractName,
       functionName: fn,
       functionArgs,
     };
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)', {
-      contract: swapData.contract,
+      originalContract: swapData.contract,
+      resolvedContract: `${resolvedContractAddress}.${contractName}`,
       fn,
       argsCount: functionArgs.length,
     });
