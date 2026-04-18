@@ -1,20 +1,21 @@
 import { 
   principalCV, 
   uintCV, 
-  contractPrincipalCV,
-  ClarityValue,
-  makeUnsignedContractCall,
-  PostConditionMode
+  tupleCV,
+  serializeCV,
+  someCV,
+  noneCV,
+  bufferCV,
+  PostConditionMode,
+  makeUnsignedContractCall
 } from '@stacks/transactions';
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
-import { BitflowSDK, QuoteResult } from '@bitflowlabs/core-sdk';
+import { QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '../bitflow';
 import { request } from '@stacks/connect';
 
 const bitflow = getBitflowSDK();
-const PROJECT_ID_MAINNET = 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV';
-const BITFLOW_EXECUTOR_MAINNET = 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.bitflow-executor-v1';
 
 export interface BitflowGaslessSwapParams {
   userAddress: string;
@@ -27,6 +28,7 @@ export interface BitflowGaslessSwapParams {
   tokenInDecimals: number;
   tokenOutDecimals: number;
   feeToken: string;
+  sponsorshipPolicy?: string;
   onProgress?: (status: string) => void;
 }
 
@@ -52,17 +54,24 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals)); 
   const minAmountOutRaw = Math.floor(bestRoute.quote * 0.98 * Math.pow(10, params.tokenOutDecimals)); // 2% slippage
 
-  // 2. Estimate Fee
-  onProgress?.('Estimating gasless fee...');
-  const estimate = await velumx.estimateFee({ feeToken, estimatedGas: 200000 });
-  const feeAmount = estimate.maxFee;
+  // Extract pool details for Trait-Forwarding (v2 uses univ2-router logic)
+  // Use 'any' to bypass SDK type mismatches and handle different route structures
+  const routeData = bestRoute as any;
+  const routeStep = routeData.route?.steps?.[0] || routeData.steps?.[0] || routeData;
+  
+  const poolId = routeStep.poolId || routeStep.swapData?.parameters?.['id'] || 0;
+  const token0 = routeStep.token0 || routeStep.tokenPath?.[0];
+  const token1 = routeStep.token1 || routeStep.tokenPath?.[1];
+  const tokenInPrincipal = routeStep.tokenIn || params.tokenIn;
+  const tokenOutPrincipal = routeStep.tokenOut || params.tokenOut;
 
-  // 3. Build Direct Call to Executor (V5 Specialized Pattern)
-  onProgress?.('Preparing transaction...');
-  const [tokenInAddr, tokenInName] = tokenIn.split('.');
-  const [tokenOutAddr, tokenOutName] = tokenOut.split('.');
-  const [feeTokenAddr, feeTokenName] = feeToken.split('.');
-  const [execAddr, execName] = BITFLOW_EXECUTOR_MAINNET.split('.');
+  // 2. Estimate Fee & Get Relayer Address
+  onProgress?.('Estimating gasless fee...');
+  const estimate = await velumx.estimateFee({ feeToken, estimatedGas: 250000 });
+  const feeAmount = estimate.maxFee;
+  
+  // Use relayer address from estimate, or fallback to config
+  const relayerAddress = estimate.relayerAddress || config.velumxRelayerAddress;
 
   // Get public key
   let publicKey = userPublicKey || '';
@@ -86,35 +95,67 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
   } catch (e) { console.warn('Failed to fetch nonce:', e); }
 
+  // 3. Serialize payload for VelumX Executor (Bitflow v2)
+  onProgress?.('Preparing transaction payload...');
+  
+  // Pack the arguments into a single tuple buffer that the executor expects
+  const payloadCv = tupleCV({
+    'pool-id': uintCV(poolId),
+    'amount-in': uintCV(amountInRaw),
+    'min-amount-out': uintCV(minAmountOutRaw)
+  });
+  
+  const serializedPayload = serializeCV(payloadCv);
+
+  // 4. Build VelumX Contract Call based on Policy
+  onProgress?.('Preparing VelumX transaction...');
+  
+  const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
+  
+  let txOptions: any;
+  
+  if (isDeveloperSponsoring) {
+    // DEVELOPER_SPONSORS: User pays nothing. Bypass VelumX contracts and call Bitflow directly.
+    // The relayer will sponsor the STX gas via the /broadcast endpoint.
+    const [contractAddress, contractName] = swapParams.contractAddress.split('.');
+    txOptions = {
+      contractAddress,
+      contractName,
+      functionName: swapParams.functionName,
+      functionArgs: swapParams.functionArgs,
+      sponsored: true,
+      network: 'mainnet'
+    };
+    console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)');
+  } else {
+    // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
+    txOptions = velumx.getExecuteGenericOptions({
+      executor: config.bitflowExecutorAddress,
+      payload: serializedPayload,
+      feeAmount: feeAmount,
+      feeToken: feeToken,
+      relayer: relayerAddress,
+      version: 'relayer-v1', // Maps to velumx-paymaster-1-1
+      token1: tokenInPrincipal,
+      token2: tokenOutPrincipal,
+      token3: token0,
+      token4: token1
+    });
+    console.log('[Policy] Using USER_PAYS (Paymaster + Executor Call)');
+  }
+
   const transaction = await makeUnsignedContractCall({
-    contractAddress: execAddr,
-    contractName: execName,
-    functionName: 'execute-swap',
-    functionArgs: [
-      principalCV(userAddress),
-      principalCV(PROJECT_ID_MAINNET),
-      principalCV(BITFLOW_EXECUTOR_MAINNET),
-      contractPrincipalCV(tokenInAddr, tokenInName),
-      contractPrincipalCV(tokenOutAddr, tokenOutName),
-      contractPrincipalCV(swapParams.contractAddress, swapParams.contractName),
-      uintCV(amountInRaw),
-      uintCV(minAmountOutRaw),
-      uintCV(feeAmount),
-      contractPrincipalCV(feeTokenAddr, feeTokenName),
-    ],
-    network: 'mainnet',
-    sponsored: true,
+    ...txOptions,
     publicKey,
-    fee: 0n,
     nonce,
+    fee: 0n,
     postConditionMode: PostConditionMode.Allow,
-    postConditions: [],
-    validateWithAbi: false,
+    postConditions: swapParams.postConditions || [],
   });
 
   const txHex = transaction.serialize();
 
-  // 4. Wallet signs WITHOUT broadcasting
+  // 5. Wallet signs WITHOUT broadcasting
   onProgress?.('Waiting for wallet signature...');
   let signedTxHex: string;
   try {
@@ -131,7 +172,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     throw err;
   }
 
-  // 5. Relayer co-signs + broadcasts
+  // 6. Relayer co-signs + broadcasts
   onProgress?.('Broadcasting via VelumX...');
   const result = await velumx.sponsor(signedTxHex, {
     feeToken: feeToken,
@@ -142,3 +183,4 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   console.log('VelumX Bitflow sponsor result:', result);
   return result.txid;
 }
+

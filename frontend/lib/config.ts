@@ -36,6 +36,8 @@ export function getConfig(): FrontendConfig {
     // DEX contracts
     stacksSwapContractAddress: process.env.NEXT_PUBLIC_STACKS_SWAP_CONTRACT_ADDRESS || (isMainnet ? 'SP102V3PRWF9674066V2FWAH0TGQEE5WQZ927S3X1.alex-vault' : 'STKYNF473GQ1V0WWCF24TV7ZR1WYAKTC79V25E3P.swap-v9-stx'), // Default to ALEX for mainnet
     stacksVexAddress: process.env.NEXT_PUBLIC_STACKS_VEX_ADDRESS || (isMainnet ? '' : 'STKYNF473GQ1V0WWCF24TV7ZR1WYAKTC79V25E3P.vextoken-v1'),
+    bitflowExecutorAddress: process.env.NEXT_PUBLIC_BITFLOW_EXECUTOR_MAINNET || '',
+    projectId: process.env.NEXT_PUBLIC_PROJECT_ID || '',
 
     // Domain IDs (Stacks USDCx bridging)
     ethereumDomainId: parseInt(process.env.NEXT_PUBLIC_ETHEREUM_DOMAIN_ID || '0'), // Ethereum

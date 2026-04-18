@@ -154,14 +154,20 @@ export function SwapInterface() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Fetch developer's supported gas tokens from relayer config
+  // Fetch developer's supported gas tokens from relayer config via SDK
   React.useEffect(() => {
-    fetch('/api/velumx/proxy/config', { cache: 'no-store' })
-      .then(r => r.json())
-      .then(data => {
+    const fetchRelayerConfig = async () => {
+      try {
+        const velumxClient = getVelumXClient();
+        const data = await velumxClient.getConfig();
+        
         if (data.sponsorshipPolicy) {
           setSponsorshipPolicy(data.sponsorshipPolicy);
+          if (data.sponsorshipPolicy === 'DEVELOPER_SPONSORS') {
+            setState(prev => ({ ...prev, gaslessMode: true }));
+          }
         }
+        
         if (data.supportedGasTokens?.length > 0) {
           setSupportedGasTokens(data.supportedGasTokens);
           // Set default gas token to first supported one if current default isn't in the list
@@ -177,9 +183,15 @@ export function SwapInterface() {
             return prev;
           });
         }
-      })
-      .catch(() => {});
-  }, []);
+      } catch (err) {
+        console.warn('Failed to fetch relayer config:', err);
+      }
+    };
+    
+    if (tokens.length > 0) {
+      fetchRelayerConfig();
+    }
+  }, [tokens]);
   const [state, setState] = useState<SwapState>({
     inputToken: null,
     outputToken: null,
@@ -443,6 +455,7 @@ export function SwapInterface() {
           tokenInDecimals: state.inputToken.decimals,
           tokenOutDecimals: state.outputToken.decimals,
           feeToken: state.selectedGasToken?.address || '',
+          sponsorshipPolicy: sponsorshipPolicy,
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }

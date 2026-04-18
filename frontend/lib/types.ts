@@ -22,6 +22,8 @@ export interface FrontendConfig {
   stacksPaymasterAddress: string;
   stacksSwapContractAddress: string;
   stacksVexAddress: string;
+  bitflowExecutorAddress: string;
+  projectId: string;
 
   // Domain IDs
   ethereumDomainId: number;

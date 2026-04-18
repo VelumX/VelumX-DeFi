@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@bitflowlabs/core-sdk": "^3.1.0",
-    "alex-sdk": "^3.2.1",
     "@prisma/client": "^6.19.2",
     "@scure/base": "^1.2.6",
     "@scure/bip32": "^2.0.1",
@@ -23,7 +22,8 @@
     "@supabase/supabase-js": "^2.99.1",
     "@types/bip39": "^2.4.2",
     "@velarprotocol/velar-sdk": "^0.7.6",
-    "@velumx/sdk": "3.1.0",
+    "@velumx/sdk": "^3.1.1",
+    "alex-sdk": "^3.2.1",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
     "lucide-react": "^0.562.0",
