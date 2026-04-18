@@ -8,7 +8,7 @@ import { BitflowSDK } from '@bitflowlabs/core-sdk';
  * integrations; these are mapped to mainnet equivalents in bitflow-gasless-swap.ts.
  */
 export const BITFLOW_CONFIG = {
-  BITFLOW_API_HOST: 'https://bitflowsdk-api-test-7owjsmt8.uk.gateway.dev',
+  BITFLOW_API_HOST: 'https://api.bitflowapis.finance',
   READONLY_CALL_API_HOST: 'https://node.bitflowapis.finance',
   BITFLOW_PROVIDER_ADDRESS: 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV',
 };
