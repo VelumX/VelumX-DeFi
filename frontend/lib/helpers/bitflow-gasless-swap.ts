@@ -59,11 +59,15 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const routeData = bestRoute as any;
   const routeStep = routeData.route?.steps?.[0] || routeData.steps?.[0] || routeData;
   
+  // Normalization helper for principals (handles STX -> wSTX mapping)
+  const WSTX_MAINNET = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx';
+  const normalize = (p: string) => (p === 'STX' || p === 'token-stx' || !p.includes('.')) ? WSTX_MAINNET : p;
+
   const poolId = routeStep.poolId || routeStep.swapData?.parameters?.['id'] || 0;
-  const token0 = routeStep.token0 || routeStep.tokenPath?.[0];
-  const token1 = routeStep.token1 || routeStep.tokenPath?.[1];
-  const tokenInPrincipal = routeStep.tokenIn || params.tokenIn;
-  const tokenOutPrincipal = routeStep.tokenOut || params.tokenOut;
+  const token0 = normalize(routeStep.token0 || routeStep.tokenPath?.[0] || '');
+  const token1 = normalize(routeStep.token1 || routeStep.tokenPath?.[1] || '');
+  const tokenInPrincipal = normalize(routeStep.tokenIn || params.tokenIn);
+  const tokenOutPrincipal = normalize(routeStep.tokenOut || params.tokenOut);
 
   // 2. Estimate Fee & Get Relayer Address
   onProgress?.('Estimating gasless fee...');
