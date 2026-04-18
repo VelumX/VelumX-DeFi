@@ -18,7 +18,6 @@ import { getBitflowSDK } from '@/lib/bitflow';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
-import { SwapDetails } from './ui/SwapDetails';
 import { TransactionStatus } from './ui/TransactionStatus';
 
 interface Token {
@@ -633,14 +632,6 @@ export function SwapInterface() {
         </div>
 
         <div className="mt-6">
-          <SwapDetails
-            quote={state.quote}
-            inputSymbol={state.inputToken?.symbol || ''}
-            outputSymbol={state.outputToken?.symbol || ''}
-            outputAmount={state.outputAmount}
-            slippage={state.slippage}
-          />
-
           {/* Route Display */}
           {state.quote?.allRoutes && state.quote.allRoutes.length > 0 && (
             <div className="mt-4 rounded-2xl overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>

@@ -5,6 +5,7 @@ import {
   tupleCV,
   serializeCV,
   contractPrincipalCV,
+  standardPrincipalCV,
   PostConditionMode,
   makeUnsignedContractCall,
 } from '@stacks/transactions';
@@ -175,13 +176,22 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       'min-dy', 'min-dz', 'min-dw', 'min-dv', 'min-received', 'amt-out-min',
       'min-x-amount', 'min-y-amount', 'min-dx']);
 
+    // Stacks address prefixes — SP/ST = standard principal, SM = simnet
+    const isStacksAddress = (v: string) => /^S[MPT][A-Z0-9]{30,}$/.test(v);
+
     // Build args from the order array
     const functionArgs: any[] = order.map((key: string) => {
       const val = p[key];
 
-      // Principal fields
+      // Contract principal: "ADDR.name"
       if (typeof val === 'string' && val.includes('.')) {
         return toContractCV(resolveTokenPrincipal(val));
+      }
+
+      // Standard principal: bare Stacks address (e.g. provider field)
+      if (typeof val === 'string' && isStacksAddress(val)) {
+        const resolved = resolveTokenAddr(val);
+        return standardPrincipalCV(resolved);
       }
 
       // Uint fields
