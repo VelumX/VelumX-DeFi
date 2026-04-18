@@ -15,7 +15,6 @@ import { getConfig } from '../config';
 import { QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '../bitflow';
 import { request } from '@stacks/connect';
-import { STACKS_MAINNET } from '@stacks/network';
 
 const bitflow = getBitflowSDK();
 
@@ -117,6 +116,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   onProgress?.('Preparing VelumX transaction...');
   
   const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
+
+  // Guard: USER_PAYS requires a valid relayer address to receive the fee token
+  if (!isDeveloperSponsoring && !relayerAddress) {
+    throw new Error('Relayer address not available. Set NEXT_PUBLIC_VELUMX_RELAYER_ADDRESS or ensure the relayer returns relayerAddress in the fee estimate.');
+  }
   
   let txOptions: any;
   
@@ -139,8 +143,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         Cl.uint(minAmountOutRaw),
         Cl.principal(userAddress)
       ],
-      sponsored: true,
-      network: STACKS_MAINNET
     };
     console.log('[Policy] Using DEVELOPER_SPONSORS (Direct Bitflow Call)');
   } else {
@@ -160,26 +162,40 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     console.log('[Policy] Using USER_PAYS (Paymaster + Executor Call)');
   }
 
-  // 5. Request signature from wallet via @stacks/connect
+  // 5. Build unsigned sponsored tx, then request wallet signature (no broadcast)
   onProgress?.('Waiting for wallet signature...');
-  
-  const signResult: any = await new Promise((resolve, reject) => {
-    request('stx_callContract', {
-      contractAddress: txOptions.contractAddress,
-      contractName: txOptions.contractName,
-      functionName: txOptions.functionName,
-      functionArgs: txOptions.functionArgs,
-      sponsored: true,
-      network: STACKS_MAINNET,
-      postConditionMode: PostConditionMode.Allow,
-      postConditions: [], // We'll re-enable these once the flow is stable
-      onFinish: (data: any) => resolve(data),
-      onCancel: () => reject(new Error('Swap cancelled by user')),
-    } as any);
+
+  const unsignedTx = await makeUnsignedContractCall({
+    contractAddress: txOptions.contractAddress,
+    contractName: txOptions.contractName,
+    functionName: txOptions.functionName,
+    functionArgs: txOptions.functionArgs,
+    postConditionMode: PostConditionMode.Allow,
+    postConditions: [],
+    network: 'mainnet',
+    sponsored: true,
+    publicKey,
+    fee: 0n,
+    nonce,
+    validateWithAbi: false,
   });
 
-  const signedTxHex = signResult.txRaw || signResult.transaction;
-  if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
+  const txHex = unsignedTx.serialize();
+
+  let signedTxHex: string;
+  try {
+    const signResult = await request('stx_signTransaction', {
+      transaction: txHex,
+      broadcast: false,
+    });
+    signedTxHex = (signResult as any).transaction ?? (signResult as any).txHex;
+    if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
+  } catch (err: any) {
+    if (err?.message?.toLowerCase().includes('cancel') || err?.code === 4001) {
+      throw new Error('Swap cancelled by user');
+    }
+    throw err;
+  }
 
   // 6. Relayer co-signs + broadcasts
   onProgress?.('Broadcasting via VelumX...');
