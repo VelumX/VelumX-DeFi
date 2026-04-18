@@ -420,7 +420,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
 
     if (!txOptions) {
-      throw new Error(`All Bitflow routes failed. Last error: ${lastError?.message}`);
+      throw new Error(
+        `No executable route found for this swap. The liquidity pool contracts may not be deployed yet. ` +
+        `Please try again later or try a different token pair.`
+      );
     }
   } else {
     // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.

@@ -213,11 +213,6 @@ export function TokenInput({
                     >
                         MAX
                     </button>
-                    {amount && parseFloat(amount) > 0 && token && (
-                        <span className="text-[10px] font-bold opacity-40" style={{ color: 'var(--text-secondary)' }}>
-                            ≈ ${(parseFloat(amount) * 1.5).toFixed(2)} USD
-                        </span>
-                    )}
                 </div>
             )}
         </div>
