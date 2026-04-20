@@ -859,8 +859,11 @@ export function SwapInterface() {
                   <div className="h-6 w-px bg-white/10 mx-1" />
                   
                   <div className="flex flex-col items-end pr-3">
-                    <span className="text-[10px] font-mono font-bold text-purple-600 dark:text-purple-400">
-                      {state.gasFee} {state.selectedGasToken?.symbol}
+                    <span className="text-[9px] uppercase tracking-widest font-black opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                      Gas Fee
+                    </span>
+                    <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400">
+                      {state.gasFee ? `${state.gasFee} ${state.selectedGasToken?.symbol}` : '—'}
                     </span>
                   </div>
                 </div>
