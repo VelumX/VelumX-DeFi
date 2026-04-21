@@ -1,9 +1,5 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import dynamic from 'next/dynamic';
-
-const HomePage = dynamic(() => import('../components/HomePage'), { ssr: false });
-
-export default function Page() {
-  return <HomePage />;
+export default function RootPage() {
+  redirect('/swap');
 }

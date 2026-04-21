@@ -20,25 +20,27 @@ import {
     Layers
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { usePathname } from 'next/navigation';
+import Link from 'next/link';
 
 const WalletButton = dynamic(() => import('./WalletButton').then(mod => mod.WalletButton), { ssr: false });
 
 interface SidebarProps {
-    activeTab: 'bridge' | 'swap' | 'earn' | 'liquidity' | 'history';
-    setActiveTab: (tab: 'bridge' | 'swap' | 'earn' | 'liquidity' | 'history') => void;
     isDarkMode: boolean;
     toggleDarkMode: () => void;
     isOpen?: boolean;
     onClose?: () => void;
 }
 
-export function Sidebar({ activeTab, setActiveTab, isDarkMode, toggleDarkMode, isOpen = false, onClose }: SidebarProps) {
+export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }: SidebarProps) {
+    const pathname = usePathname();
+
     const menuItems = [
-        { id: 'bridge', label: 'Bridge', icon: ArrowLeftRight },
-        { id: 'swap', label: 'Swap', icon: Repeat },
-        { id: 'earn', label: 'Earn (stSTX)', icon: TrendingUp },
-        { id: 'history', label: 'History', icon: History },
-    ] as const;
+        { id: 'bridge', label: 'Bridge', icon: ArrowLeftRight, href: '/bridge' },
+        { id: 'swap', label: 'Swap', icon: Repeat, href: '/swap' },
+        { id: 'earn', label: 'Earn (stSTX)', icon: TrendingUp, href: '/earn' },
+        { id: 'history', label: 'History', icon: History, href: '/history' },
+    ];
 
     return (
         <aside
@@ -68,15 +70,14 @@ export function Sidebar({ activeTab, setActiveTab, isDarkMode, toggleDarkMode, i
             <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
                 {menuItems.map((item) => {
                     const Icon = item.icon;
-                    const isActive = activeTab === item.id;
+                    const isActive = pathname === item.href;
 
                     return (
-                        <button
+                        <Link
                             key={item.id}
-                            onClick={() => {
-                                setActiveTab(item.id);
-                                onClose?.();
-                            }}
+                            href={item.href}
+                            onClick={onClose}
+                            aria-current={isActive ? 'page' : undefined}
                             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-300 group ${isActive
                                 ? 'bg-gradient-to-r from-purple-600/10 to-blue-600/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 shadow-lg shadow-purple-500/5'
                                 : 'text-black hover:bg-gray-100/50 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-800/50'
@@ -92,7 +93,7 @@ export function Sidebar({ activeTab, setActiveTab, isDarkMode, toggleDarkMode, i
                             {isActive && (
                                 <div className="ml-auto w-1.5 h-1.5 rounded-full bg-purple-500 shadow-glow animate-pulse" />
                             )}
-                        </button>
+                        </Link>
                     );
                 })}
             </nav>
