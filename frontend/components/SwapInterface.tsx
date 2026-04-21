@@ -143,6 +143,8 @@ export function SwapInterface() {
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
   const [reachableTokenIds, setReachableTokenIds] = useState<Set<string> | null>(null);
   const [isLoadingReachable, setIsLoadingReachable] = useState(false);
+  // Cache: tokenId → Set of reachable output tokenIds (persists for the session)
+  const reachableCache = React.useRef<Map<string, Set<string>>>(new Map());
   const gasDropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Close gas dropdown on outside click
@@ -254,6 +256,27 @@ export function SwapInterface() {
       if (!isMounted) return;
       console.log(`[Swap] Discovery Complete: ${mapped.length} tokens found`);
       setTokens(mapped);
+
+      // Preload all possible swap pairs for every token so there's no loading when user selects a sell token
+      const preloadSwapPairs = async () => {
+        try {
+          const bitflow = getBitflowSDK();
+          for (const token of mapped) {
+            if (!token.tokenId) continue;
+            try {
+              const reachable = await bitflow.getAllPossibleTokenY(token.tokenId);
+              reachableCache.current.set(token.tokenId, new Set(reachable));
+            } catch (e) {
+              console.warn(`[Swap] Failed to preload pairs for ${token.symbol}:`, e);
+              reachableCache.current.set(token.tokenId, new Set()); // cache empty to avoid retry
+            }
+          }
+          console.log(`[Swap] Preloaded swap pairs for ${reachableCache.current.size} tokens`);
+        } catch (e) {
+          console.warn('[Swap] Swap pair preload failed:', e);
+        }
+      };
+      preloadSwapPairs();
 
       // Auto-select defaults once tokens are discovered
       setState(prev => {
@@ -399,20 +422,33 @@ export function SwapInterface() {
       setIsLoadingReachable(false);
       return;
     }
+    const tokenId = state.inputToken.tokenId;
+
+    // Serve from cache if already fetched — no re-fetch on every sell token change
+    if (reachableCache.current.has(tokenId)) {
+      setReachableTokenIds(reachableCache.current.get(tokenId)!);
+      setIsLoadingReachable(false);
+      return;
+    }
+
     let cancelled = false;
     setIsLoadingReachable(true);
     const fetchReachable = async () => {
       try {
         const bitflow = getBitflowSDK();
-        const reachable = await bitflow.getAllPossibleTokenY(state.inputToken!.tokenId!);
+        const reachable = await bitflow.getAllPossibleTokenY(tokenId);
+        const reachableSet = new Set(reachable);
+        reachableCache.current.set(tokenId, reachableSet);
         if (!cancelled) {
-          setReachableTokenIds(new Set(reachable));
+          setReachableTokenIds(reachableSet);
           setIsLoadingReachable(false);
         }
       } catch (e) {
         console.warn('[Swap] Failed to fetch reachable tokens:', e);
+        // Cache empty set so we don't retry on every keystroke
+        reachableCache.current.set(tokenId, new Set());
         if (!cancelled) {
-          setReachableTokenIds(null); // null = show all on error
+          setReachableTokenIds(new Set()); // empty = show "No pairs found"
           setIsLoadingReachable(false);
         }
       }
@@ -689,12 +725,14 @@ export function SwapInterface() {
             token={state.outputToken}
             setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
             tokens={
-              // While loading reachable tokens, show full list to avoid blank dropdown.
-              // Once loaded, filter to only tokens Bitflow can route to from the selected input.
-              // Falls back to full list if fetch failed (null).
-              (!isLoadingReachable && reachableTokenIds)
-                ? tokens.filter(t => t.tokenId && reachableTokenIds.has(t.tokenId))
-                : tokens
+              // While loading, show full list. Once loaded, filter to reachable tokens.
+              // If reachableTokenIds is an empty Set (no pairs), pass empty array — TokenInput
+              // will show the "No pairs found" empty state via isLoadingTokens=false + empty list.
+              isLoadingReachable
+                ? tokens
+                : reachableTokenIds !== null
+                  ? tokens.filter(t => t.tokenId && reachableTokenIds.has(t.tokenId))
+                  : tokens
             }
             balance={getBalance(state.outputToken)}
             isProcessing={state.isProcessing}
