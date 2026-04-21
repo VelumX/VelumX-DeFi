@@ -38,19 +38,7 @@ export default function NotFound() {
 
         <Link
           href="/swap"
-          className="inline-block w-full px-6 py-3 rounded-xl font-medium transition-colors"
-          style={{
-            backgroundColor: 'rgb(124, 58, 237)',
-            color: '#ffffff',
-          }}
-          onMouseOver={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.backgroundColor =
-              'rgb(109, 40, 217)';
-          }}
-          onMouseOut={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.backgroundColor =
-              'rgb(124, 58, 237)';
-          }}
+          className="inline-block w-full px-6 py-3 rounded-xl font-medium transition-colors bg-violet-600 hover:bg-violet-700 text-white"
         >
           Return to Swap
         </Link>
