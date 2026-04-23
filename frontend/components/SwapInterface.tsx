@@ -257,19 +257,24 @@ export function SwapInterface() {
       console.log(`[Swap] Discovery Complete: ${mapped.length} tokens found`);
       setTokens(mapped);
 
-      // Preload all possible swap pairs for every token so there's no loading when user selects a sell token
+      // Preload all possible swap pairs in parallel (batched to avoid rate limits)
       const preloadSwapPairs = async () => {
         try {
           const bitflow = getBitflowSDK();
-          for (const token of mapped) {
-            if (!token.tokenId) continue;
-            try {
-              const reachable = await bitflow.getAllPossibleTokenY(token.tokenId);
-              reachableCache.current.set(token.tokenId, new Set(reachable));
-            } catch (e) {
-              console.warn(`[Swap] Failed to preload pairs for ${token.symbol}:`, e);
-              reachableCache.current.set(token.tokenId, new Set()); // cache empty to avoid retry
-            }
+          const BATCH_SIZE = 5;
+          const tokensWithId = mapped.filter(t => t.tokenId);
+          for (let i = 0; i < tokensWithId.length; i += BATCH_SIZE) {
+            const batch = tokensWithId.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(async token => {
+              if (reachableCache.current.has(token.tokenId!)) return; // already cached
+              try {
+                const reachable = await bitflow.getAllPossibleTokenY(token.tokenId!);
+                reachableCache.current.set(token.tokenId!, new Set(reachable));
+              } catch (e) {
+                console.warn(`[Swap] Failed to preload pairs for ${token.symbol}:`, e);
+                reachableCache.current.set(token.tokenId!, new Set());
+              }
+            }));
           }
           console.log(`[Swap] Preloaded swap pairs for ${reachableCache.current.size} tokens`);
         } catch (e) {
@@ -305,6 +310,29 @@ export function SwapInterface() {
     const fetchBitflowTokens = async () => {
       try {
         setIsDiscovering(true);
+
+        // ── 1. Serve from localStorage cache immediately (instant render) ──
+        try {
+          const cached = localStorage.getItem(CACHE_KEY);
+          if (cached) {
+            const { timestamp, data } = JSON.parse(cached);
+            if (Date.now() - timestamp < CACHE_TTL && data?.length > 0) {
+              applyTokens(mapTokens(data));
+              setIsDiscovering(false);
+              // Still refresh in background so cache stays fresh
+              const bitflow = getBitflowSDK();
+              bitflow.getAvailableTokens().then(fresh => {
+                if (fresh?.length > 0) {
+                  applyTokens(mapTokens(fresh));
+                  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh })); } catch (e) {}
+                }
+              }).catch(() => {});
+              return;
+            }
+          }
+        } catch (e) {}
+
+        // ── 2. No valid cache — fetch fresh ──
         const bitflow = getBitflowSDK();
         const bitflowTokens = await bitflow.getAvailableTokens();
         
