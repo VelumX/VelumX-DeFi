@@ -36,8 +36,11 @@ export function getConfig(): FrontendConfig {
     // DEX contracts
     stacksSwapContractAddress: process.env.NEXT_PUBLIC_STACKS_SWAP_CONTRACT_ADDRESS || (isMainnet ? 'SP102V3PRWF9674066V2FWAH0TGQEE5WQZ927S3X1.alex-vault' : 'STKYNF473GQ1V0WWCF24TV7ZR1WYAKTC79V25E3P.swap-v9-stx'), // Default to ALEX for mainnet
     stacksVexAddress: process.env.NEXT_PUBLIC_STACKS_VEX_ADDRESS || (isMainnet ? '' : 'STKYNF473GQ1V0WWCF24TV7ZR1WYAKTC79V25E3P.vextoken-v1'),
-    bitflowExecutorAddress: process.env.NEXT_PUBLIC_BITFLOW_EXECUTOR_MAINNET || '',
-    projectId: process.env.NEXT_PUBLIC_PROJECT_ID || '',
+
+    // VelumX DeFi Paymaster — the deployed paymaster contract for USER_PAYS flows.
+    // Developers using VelumX SDK set this to their own paymaster contract address.
+    // VelumX DeFi uses velumx-defi-paymaster-v1 as the reference implementation.
+    velumxPaymasterAddress: process.env.NEXT_PUBLIC_VELUMX_DEFI_PAYMASTER_ADDRESS || (isMainnet ? 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.velumx-defi-paymaster-v1' : ''),
 
     // Domain IDs (Stacks USDCx bridging)
     ethereumDomainId: parseInt(process.env.NEXT_PUBLIC_ETHEREUM_DOMAIN_ID || '0'), // Ethereum

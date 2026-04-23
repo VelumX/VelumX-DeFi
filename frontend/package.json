@@ -22,7 +22,7 @@
     "@supabase/supabase-js": "^2.99.1",
     "@types/bip39": "^2.4.2",
     "@velarprotocol/velar-sdk": "^0.7.6",
-    "@velumx/sdk": "^3.1.1",
+    "@velumx/sdk": "^3.1.2",
     "alex-sdk": "^3.2.1",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",

@@ -1,13 +1,16 @@
 /**
  * Simple Gasless Bridge Helper — Sponsored Transaction Flow
  *
- * Same fix as simple-gasless-swap.ts:
- * Use makeUnsignedContractCall({ sponsored: true }) + request('stx_signTransaction')
- * to guarantee AuthType.Sponsored before the relayer sees the tx.
+ * Calls velumx-defi-paymaster-v1 bridge-usdcx directly using buildSponsoredContractCall.
+ * The paymaster atomically:
+ *   1. Collects fee-amount of fee-token from user → relayer
+ *   2. Burns USDCx to initiate the cross-chain bridge to Ethereum
+ *
+ * The relayer co-signs and broadcasts via velumx.sponsor().
  */
 
-import { getNetworkInstance, getStacksTransactions } from '../stacks-loader';
-import { PostConditionMode } from '@stacks/transactions';
+import { contractPrincipalCV, principalCV, uintCV, bufferCV } from '@stacks/transactions';
+import { buildSponsoredContractCall } from '@velumx/sdk';
 import { getConfig } from '../config';
 import { parseUnits } from 'viem';
 import { getVelumXClient } from '../velumx';
@@ -17,67 +20,117 @@ export interface SimpleGaslessBridgeParams {
   userAddress: string;
   userPublicKey?: string;
   amount: string;           // Human-readable e.g. "10.5"
-  recipientAddress: string; // Ethereum address
+  recipientAddress: string; // Ethereum address (0x...)
   onProgress?: (step: string) => void;
 }
 
 export async function executeSimpleGaslessBridge(params: SimpleGaslessBridgeParams): Promise<string> {
-  const { amount, recipientAddress, onProgress } = params;
+  const { userAddress, userPublicKey, amount, recipientAddress, onProgress } = params;
   const config = getConfig();
   const velumx = getVelumXClient();
 
-  const amountInMicro = parseUnits(amount, 6);
+  const amountInMicro = parseUnits(amount, 6); // USDCx has 6 decimals
 
-  // Step 1: Estimate fee
+  // Step 1: Estimate fee & get relayer address
   onProgress?.('Calculating fees...');
   const estimate = await velumx.estimateFee({
     feeToken: config.stacksUsdcxAddress,
-    estimatedGas: 150000
+    estimatedGas: 150_000,
   });
   const feeAmount = estimate.maxFee || '0';
+  const relayerAddress = estimate.relayerAddress;
   const isDeveloperSponsored = estimate.policy === 'DEVELOPER_SPONSORS';
 
-  if (!config.velumxRelayerAddress) {
-    throw new Error('VelumX Configuration Error: NEXT_PUBLIC_VELUMX_RELAYER_ADDRESS is not set.');
+  if (!isDeveloperSponsored && !relayerAddress) {
+    throw new Error('Relayer address not available from fee estimate.');
   }
 
-  // Step 2: Build v5 Universal Options (New SDK v3.1.0)
+  // Step 2: Get public key
+  let publicKey = userPublicKey || '';
+  if (!publicKey) {
+    try {
+      const addrResult = await request('stx_getAddresses') as any;
+      const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === userAddress)
+        || (addrResult?.addresses || [])[0];
+      publicKey = stxEntry?.publicKey || '';
+    } catch (e) { console.warn('stx_getAddresses failed:', e); }
+  }
+  if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
+
+  // Step 3: Fetch nonce
+  let nonce = 0n;
+  try {
+    const nonceRes = await fetch(`https://api.mainnet.hiro.so/v2/accounts/${userAddress}?proof=0`);
+    if (nonceRes.ok) {
+      const accountData = await nonceRes.json();
+      nonce = BigInt(accountData.nonce ?? 0);
+    }
+  } catch (e) { console.warn('Failed to fetch nonce:', e); }
+
+  // Step 4: Build the bridge-usdcx call on velumx-defi-paymaster-v1
   onProgress?.('Preparing transaction...');
-  const recipientBytes = recipientAddress.startsWith('0x') ? recipientAddress.slice(2) : recipientAddress;
-  
-  const txOptions = velumx.getBridgeOptions({
-    projectId: 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV',
-    executor: 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.usdcx-bridge-executor-v1',
-    payload: encodeBridgePayload(Number(amountInMicro), recipientBytes),
-    feeAmount: feeAmount,
-    feeToken: config.stacksUsdcxAddress
+
+  // Encode Ethereum recipient as 32-byte buffer (right-pad 20-byte address with 12 zero bytes)
+  const hexAddr = recipientAddress.startsWith('0x') ? recipientAddress.slice(2) : recipientAddress;
+  const recipientBuf = Buffer.alloc(32);
+  Buffer.from(hexAddr.padStart(40, '0'), 'hex').copy(recipientBuf, 12); // right-aligned in 32 bytes
+
+  const [paymasterAddr, paymasterName] = config.velumxPaymasterAddress.split('.');
+  const [feeTokenAddr, feeTokenName] = config.stacksUsdcxAddress.split('.');
+
+  // bridge-usdcx(amount, recipient, fee-amount, relayer, fee-token)
+  const functionArgs = [
+    uintCV(amountInMicro),                                    // amount
+    bufferCV(recipientBuf),                                   // recipient (32-byte buffer)
+    uintCV(BigInt(feeAmount)),                                // fee-amount
+    principalCV(isDeveloperSponsored ? userAddress : relayerAddress!), // relayer (or user for dev-sponsors)
+    contractPrincipalCV(feeTokenAddr, feeTokenName),          // fee-token (USDCx)
+  ];
+
+  // Step 5: Build unsigned sponsored tx
+  const unsignedTx = await buildSponsoredContractCall({
+    contractAddress: paymasterAddr,
+    contractName: paymasterName,
+    functionName: 'bridge-usdcx',
+    functionArgs,
+    publicKey,
+    nonce,
+    network: 'mainnet',
   });
 
-  // Step 3: Wallet signs WITHOUT broadcasting
+  console.log('[Bridge] Built sponsored tx via velumx-defi-paymaster-v1 bridge-usdcx');
+
+  // Step 6: Wallet signs (no broadcast)
   onProgress?.('Waiting for wallet signature...');
-  const signResult = await request('stx_signTransaction', {
-    transaction: (txOptions as any).serialize ? (txOptions as any).serialize() : JSON.stringify(txOptions),
-    broadcast: false,
-  });
 
-  const signedTxHex = (signResult as any).transaction || (signResult as any).txHex;
+  // stx_signTransaction expects a hex string — convert Uint8Array if needed
+  const txForSigning = unsignedTx instanceof Uint8Array
+    ? Buffer.from(unsignedTx).toString('hex')
+    : unsignedTx as string;
 
-  // Step 4: Relayer sponsors and broadcasts
+  let signedTxHex: string;
+  try {
+    const signResult = await request('stx_signTransaction', {
+      transaction: txForSigning,
+      broadcast: false,
+    });
+    signedTxHex = (signResult as any).transaction ?? (signResult as any).txHex;
+    if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
+  } catch (err: any) {
+    if (err?.message?.toLowerCase().includes('cancel') || err?.code === 4001) {
+      throw new Error('Bridge cancelled by user');
+    }
+    throw err;
+  }
+
+  // Step 7: Relayer co-signs + broadcasts
   onProgress?.('Broadcasting via VelumX...');
   const result = await velumx.sponsor(signedTxHex, {
-    feeToken: config.stacksUsdcxAddress,
-    feeAmount: feeAmount,
-    network: config.stacksNetwork as 'mainnet' | 'testnet'
+    feeToken: isDeveloperSponsored ? undefined : config.stacksUsdcxAddress,
+    feeAmount: isDeveloperSponsored ? '0' : feeAmount,
+    network: 'mainnet',
   });
 
   console.log('VelumX bridge result:', result);
   return result.txid;
-}
-
-function encodeBridgePayload(amount: number, recipient: string): string {
-  const buff = Buffer.alloc(48);
-  buff.writeBigUInt64BE(BigInt(amount), 8); // amount at bytes 8-16
-  const hexRecipient = recipient.startsWith('0x') ? recipient.slice(2) : recipient;
-  buff.write(hexRecipient.padStart(64, '0'), 16, 'hex'); // recipient at bytes 16-48
-  return '0x' + buff.toString('hex');
 }

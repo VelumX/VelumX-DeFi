@@ -22,8 +22,7 @@ export interface FrontendConfig {
   stacksPaymasterAddress: string;
   stacksSwapContractAddress: string;
   stacksVexAddress: string;
-  bitflowExecutorAddress: string;
-  projectId: string;
+  velumxPaymasterAddress: string; // velumx-defi-paymaster-v1 (or developer's own paymaster)
 
   // Domain IDs
   ethereumDomainId: number;

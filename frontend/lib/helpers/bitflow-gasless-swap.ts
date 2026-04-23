@@ -2,12 +2,13 @@ import {
   uintCV,
   someCV,
   noneCV,
-  tupleCV,
-  serializeCV,
   contractPrincipalCV,
+  principalCV,
+  bufferCV,
   PostConditionMode,
   makeUnsignedContractCall,
 } from '@stacks/transactions';
+import { buildSponsoredContractCall } from '@velumx/sdk';
 import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
 import { QuoteResult } from '@bitflowlabs/core-sdk';
@@ -201,23 +202,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
   } catch (e) { console.warn('Failed to fetch nonce:', e); }
 
-  // 3. Serialize payload for VelumX Executor (Bitflow v2) — used by USER_PAYS path only
-  onProgress?.('Preparing transaction payload...');
-
-  // Pool ID and amounts come from the route's swapData parameters
-  const routeSwapData = (bestRoute as any).swapData as { contract: string; function: string; parameters: Record<string, any> };
-  const routeParams = routeSwapData?.parameters || {};
-  const poolId: number = routeParams['id'] || routeParams['pool-id'] || 0;
-
-  const payloadCv = tupleCV({
-    'pool-id': uintCV(poolId),
-    'amount-in': uintCV(amountInRaw),
-    'min-amount-out': uintCV(minAmountOutRaw)
-  });
-  
-  const serializedPayload = serializeCV(payloadCv);
-
-  // 4. Build VelumX Contract Call based on Policy
+  // 3. Build VelumX Contract Call based on Policy
   onProgress?.('Preparing VelumX transaction...');
   
   const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
@@ -269,8 +254,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         console.log('[Bitflow] Trying route:', `${resolvedContractAddress}.${resolvedContractName}`, swapData.function);
 
         // Verify the contract actually exists on mainnet before calling getSwapParams.
-        // getSwapParams fetches the ABI from the Bitflow node (which serves simnet ABIs),
-        // so it succeeds even for undeployed contracts. We must check mainnet directly.
         const abiCheck = await fetch(
           `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
         );
@@ -330,60 +313,89 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       );
     }
   } else {
-    // USER_PAYS: User pays SIP-010 fee. Call via Paymaster contract which then calls our Executor.
-    // Extract token principals from the route for the executor trait-forwarding args.
+    // USER_PAYS: User pays SIP-010 fee via velumx-defi-paymaster-v1.
+    //
+    // The paymaster contract atomically:
+    //   1. Collects fee-amount of fee-token from user → relayer
+    //   2. Calls the Bitflow pool/router directly
+    //
+    // We determine which paymaster function to call based on the Bitflow route's
+    // swapData.contract — stableswap pools use swap-bitflow-stableswap[/reverse],
+    // router contracts use swap-bitflow-router.
     const swapData = (bestRoute as any).swapData as { contract: string; function: string; parameters: Record<string, any> };
-    const p = swapData?.parameters || {};
-    const WSTX = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx';
-    const resolveToken = (val: string | undefined) => (!val || !val.includes('.')) ? WSTX : val;
+    const routeParams = swapData?.parameters || {};
+    const poolId: number = routeParams['id'] || routeParams['pool-id'] || 1;
 
-    const tokenInPrincipal = resolveToken(p['token-x-trait'] || p['token-x'] || params.tokenIn);
-    const tokenOutPrincipal = resolveToken(p['token-y-trait'] || p['token-y'] || params.tokenOut);
-    const token2 = resolveToken(p['token-z-trait'] || p['token-z']);
-    const token3 = resolveToken(p['token-w-trait'] || p['token-w']);
+    // Resolve the pool/router contract to its mainnet address
+    const [poolAddr, poolName] = swapData.contract.split('.');
+    const fullKey = `${poolAddr}.${poolName}`;
+    let resolvedPool: string;
+    if (FULL_CONTRACT_OVERRIDES[fullKey]) {
+      resolvedPool = FULL_CONTRACT_OVERRIDES[fullKey];
+    } else {
+      const resolvedAddr = MAINNET_CONTRACT_MAP[poolAddr] || poolAddr;
+      resolvedPool = `${resolvedAddr}.${poolName}`;
+    }
 
-    txOptions = velumx.getExecuteGenericOptions({
-      executor: config.bitflowExecutorAddress,
-      payload: serializedPayload,
-      feeAmount: feeAmount,
-      feeToken: feeToken,
-      relayer: relayerAddress,
-      version: 'relayer-v1', // Maps to velumx-paymaster-1-1
-      token1: tokenInPrincipal,
-      token2: tokenOutPrincipal,
-      token3: token2,
-      token4: token3,
-    });
-    console.log('[Policy] Using USER_PAYS (Paymaster + Executor Call)');
+    // Determine if this is a stableswap pool or a router
+    const isStableswap = resolvedPool.includes('stableswap-');
+    const isReverse = swapData.function === 'swap-y-for-x';
+
+    const [paymasterAddr, paymasterName] = config.velumxPaymasterAddress.split('.');
+    const [feeTokenAddr, feeTokenName] = feeToken.split('.');
+    const [tokenInAddr, tokenInName] = params.tokenIn.split('.');
+    const [tokenOutAddr, tokenOutName] = params.tokenOut.split('.');
+    const [poolContractAddr, poolContractName] = resolvedPool.split('.');
+
+    let functionName: string;
+    if (isStableswap && isReverse) {
+      functionName = 'swap-bitflow-stableswap-reverse';
+    } else if (isStableswap) {
+      functionName = 'swap-bitflow-stableswap';
+    } else {
+      functionName = 'swap-bitflow-router';
+    }
+
+    const functionArgs = [
+      contractPrincipalCV(poolContractAddr, poolContractName),  // pool / router
+      uintCV(poolId),                                            // id
+      contractPrincipalCV(tokenInAddr, tokenInName),             // token-x
+      contractPrincipalCV(tokenOutAddr, tokenOutName),           // token-y
+      uintCV(amountInRaw),                                       // amount-in
+      uintCV(minAmountOutRaw),                                   // min-amount-out
+      uintCV(BigInt(feeAmount)),                                 // fee-amount
+      principalCV(relayerAddress!),                              // relayer
+      contractPrincipalCV(feeTokenAddr, feeTokenName),           // fee-token
+    ];
+
+    txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
+    console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', { functionName, pool: resolvedPool });
   }
 
   // 5. Build unsigned sponsored tx, then request wallet signature (no broadcast)
   onProgress?.('Waiting for wallet signature...');
 
-  const unsignedTx = await makeUnsignedContractCall({
+  const unsignedTx = await buildSponsoredContractCall({
     contractAddress: txOptions.contractAddress,
     contractName: txOptions.contractName,
     functionName: txOptions.functionName,
     functionArgs: txOptions.functionArgs,
-    postConditionMode: PostConditionMode.Allow,
-    postConditions: [],
-    network: 'mainnet',
-    sponsored: true,
     publicKey,
-    fee: 0n,
     nonce,
-    validateWithAbi: false,
+    network: 'mainnet',
   });
 
-  // serialize() returns Uint8Array in @stacks/transactions v7+.
-  // stx_signTransaction accepts the raw Uint8Array directly (same as simple-gasless-swap.ts).
-  const txHex = unsignedTx.serialize();
-  console.log('[Bitflow] Built sponsored tx, length:', (txHex as any).length ?? (txHex as string).length);
+  console.log('[Bitflow] Built sponsored tx, length:', (unsignedTx as any).length ?? (unsignedTx as string).length);
+
+  // stx_signTransaction expects a hex string — convert Uint8Array if needed
+  const txForSigning = unsignedTx instanceof Uint8Array
+    ? Buffer.from(unsignedTx).toString('hex')
+    : unsignedTx as string;
 
   let signedTxHex: string;
   try {
     const signResult = await request('stx_signTransaction', {
-      transaction: txHex,
+      transaction: txForSigning,
       broadcast: false,
     });
     signedTxHex = (signResult as any).transaction ?? (signResult as any).txHex;
