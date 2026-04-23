@@ -442,8 +442,8 @@ export function SwapInterface() {
     }
   }, [state.gaslessMode, state.selectedGasToken]);
 
-  // Fetch quote and fee estimate when input changes
-  // When input token changes, fetch which output tokens Bitflow can route to
+  // When input token changes, fetch which output tokens Bitflow can route to.
+  // This only affects the buy token dropdown filter — it does NOT block quotes.
   useEffect(() => {
     if (!state.inputToken?.tokenId) {
       setReachableTokenIds(null);
@@ -452,13 +452,15 @@ export function SwapInterface() {
     }
     const tokenId = state.inputToken.tokenId;
 
-    // Serve from cache if already fetched — no re-fetch on every sell token change
+    // Serve from cache instantly — no spinner, no delay
     if (reachableCache.current.has(tokenId)) {
       setReachableTokenIds(reachableCache.current.get(tokenId)!);
       setIsLoadingReachable(false);
       return;
     }
 
+    // Not cached yet — fetch in background, show full token list in the meantime
+    // (isLoadingReachable=true passes full list to TokenInput, not a spinner)
     let cancelled = false;
     setIsLoadingReachable(true);
     const fetchReachable = async () => {
@@ -473,10 +475,9 @@ export function SwapInterface() {
         }
       } catch (e) {
         console.warn('[Swap] Failed to fetch reachable tokens:', e);
-        // Cache empty set so we don't retry on every keystroke
         reachableCache.current.set(tokenId, new Set());
         if (!cancelled) {
-          setReachableTokenIds(new Set()); // empty = show "No pairs found"
+          setReachableTokenIds(new Set());
           setIsLoadingReachable(false);
         }
       }
@@ -489,15 +490,21 @@ export function SwapInterface() {
     if (state.inputToken && state.outputToken && state.inputAmount && parseFloat(state.inputAmount) > 0) {
       const timer = setTimeout(() => {
         fetchQuote();
-        if (state.gaslessMode) {
-          fetchFeeEstimate();
-        }
       }, 300);
       return () => clearTimeout(timer);
     } else {
       setState(prev => ({ ...prev, outputAmount: '', quote: null }));
     }
-  }, [state.inputToken, state.outputToken, state.inputAmount, state.gaslessMode, fetchFeeEstimate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.inputToken, state.outputToken, state.inputAmount]);
+
+  // Separate effect for fee estimate — doesn't block or delay quotes
+  useEffect(() => {
+    if (state.gaslessMode && state.selectedGasToken && state.inputToken && state.outputToken) {
+      fetchFeeEstimate();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.gaslessMode, state.selectedGasToken]);
 
 
 

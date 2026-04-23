@@ -337,8 +337,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       resolvedPool = `${resolvedAddr}.${poolName}`;
     }
 
-    // Determine if this is a stableswap pool or a router
-    const isStableswap = resolvedPool.includes('stableswap-');
+    // Determine if this is a stableswap pool or a router.
+    // A contract is a stableswap POOL only if its name starts with "stableswap-".
+    // Contracts like "router-stableswap-velar-v-1-5" contain "stableswap" but are routers.
+    const contractName = resolvedPool.split('.')[1] || '';
+    const isStableswap = contractName.startsWith('stableswap-');
     const isReverse = swapData.function === 'swap-y-for-x';
 
     const [paymasterAddr, paymasterName] = config.velumxPaymasterAddress.split('.');
