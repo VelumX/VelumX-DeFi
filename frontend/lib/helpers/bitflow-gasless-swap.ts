@@ -2,6 +2,8 @@ import {
   uintCV,
   someCV,
   noneCV,
+  trueCV,
+  falseCV,
   contractPrincipalCV,
   principalCV,
   bufferCV,
@@ -395,36 +397,80 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const [feeTokenAddr, feeTokenName] = feeToken.split('.');
 
     if (isVelarXyk || isVelarSS) {
-      // Velar routers use swap-helper-a/b/c/d with tuple trait args.
-      // The paymaster has dedicated hardcoded wrapper functions for each hop count.
-      // We use getSwapParams to get the SDK-built args, then map the function name
-      // and append the fee args.
-      const patchedRoute = {
-        ...((bestRoute as any).route || bestRoute),
-        swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
-      };
-      const swapParams = await bitflow.getSwapParams(
-        { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
-        userAddress,
-        0.01
-      );
+      // Velar routers use tuple trait args internally, but the paymaster wrapper
+      // functions take FLAT positional args. We must build them manually from
+      // swapData.parameters — the SDK's getSwapParams returns Clarity tuples
+      // which are incompatible with the paymaster's flat function signatures.
+      //
+      // Paymaster swap-velar-{xyk,stableswap}-router-{a,b,c,d} signature:
+      //   amount-in, min-amount-out, provider, swaps-reversed,
+      //   xyk/ss-token-a, xyk/ss-token-b, xyk/ss-pool-a,
+      //   velar-token-a, velar-token-b [, velar-token-c [, velar-token-d [, velar-token-e]]],
+      //   velar-share-fee-to,
+      //   fee-amount, relayer, fee-token
 
-      // Map swap-helper-{a,b,c,d} → swap-velar-{xyk,stableswap}-router-{a,b,c,d}
-      const hopSuffix = swapParams.functionName.replace('swap-helper-', ''); // 'a', 'b', 'c', or 'd'
+      const tokenPath: string[] = routeParams['token-path'] || routeParams['tokenPath'] || [];
+      const poolPath: string[]  = routeParams['pool-path']  || routeParams['poolPath']  || [];
+      const swapsReversed: boolean = routeParams['swaps-reversed'] ?? false;
+      const provider: string | null = routeParams['provider'] || null;
+
+      // Resolve each token/pool principal to mainnet
+      const resolveP = (p: string) => {
+        const [a, n] = p.split('.');
+        const full = `${a}.${n}`;
+        if (FULL_CONTRACT_OVERRIDES[full]) return FULL_CONTRACT_OVERRIDES[full];
+        return `${MAINNET_CONTRACT_MAP[a] || a}.${n}`;
+      };
+      const toCV = (p: string) => {
+        const [a, n] = resolveP(p).split('.');
+        return contractPrincipalCV(a, n);
+      };
+
+      // Determine hop suffix from function name (swap-helper-a/b/c/d)
+      const hopSuffix = swapData.function.replace('swap-helper-', ''); // 'a','b','c','d'
       const prefix = isVelarXyk ? 'swap-velar-xyk-router' : 'swap-velar-stableswap-router';
       const functionName = `${prefix}-${hopSuffix}`;
 
-      // The SDK args are the first N positional args for the Velar router call.
-      // The paymaster wrapper appends fee-amount, relayer, fee-token at the end.
-      const functionArgs = [
-        ...swapParams.functionArgs,
+      // Velar share-fee-to contract (always the same)
+      const VELAR_SHARE_FEE_TO = 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-share-fee-to';
+      const [sfAddr, sfName] = VELAR_SHARE_FEE_TO.split('.');
+
+      // Build flat args matching the paymaster signature exactly.
+      // token-path has N+1 tokens for N hops; pool-path has N pools.
+      // For hop-a: xyk-token-a/b = tokenPath[0]/[1], xyk-pool-a = poolPath[0]
+      //            velar-token-a/b = tokenPath[0]/[1]
+      // For hop-b: same xyk section, velar-token-a/b/c = tokenPath[0]/[1]/[2]
+      // etc.
+      const minOut = Math.floor((bestRoute.quote ?? 0) * 0.99 * Math.pow(10, params.tokenOutDecimals));
+
+      const baseArgs = [
+        uintCV(amountInRaw),
+        uintCV(minOut),
+        provider ? someCV(principalCV(provider)) : noneCV(),
+        swapsReversed ? trueCV() : falseCV(),
+        // xyk/ss token-a, token-b
+        toCV(tokenPath[0] || params.tokenIn),
+        toCV(tokenPath[1] || params.tokenOut),
+        // xyk/ss pool-a
+        toCV(poolPath[0] || resolvedPool),
+        // velar tokens (all tokens in path)
+        ...tokenPath.map(toCV),
+        // velar-share-fee-to
+        contractPrincipalCV(sfAddr, sfName),
+        // fee args
         uintCV(BigInt(feeAmount)),
         principalCV(relayerAddress!),
         contractPrincipalCV(feeTokenAddr, feeTokenName),
       ];
 
-      txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
-      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1 Velar)', { functionName, router: resolvedPool });
+      txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs: baseArgs };
+      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1 Velar)', {
+        functionName,
+        router: resolvedPool,
+        tokenPath,
+        poolPath,
+        argsCount: baseArgs.length,
+      });
     } else {
       // For stableswap and standard router routes, use getSwapParams to get the
       // correct SDK-built args, then determine the paymaster function name and
