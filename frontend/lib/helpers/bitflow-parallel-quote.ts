@@ -268,7 +268,7 @@ export async function getParallelQuote(
   );
 
   // 6. Flatten and sort
-  const allRoutes = results.flatMap((r, i) => {
+  const allRoutes: any[] = results.flatMap((r, i) => {
     if (r.status === 'fulfilled') return [r.value];
     return [{
       route: routes[i],
