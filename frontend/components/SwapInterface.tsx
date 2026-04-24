@@ -141,10 +141,6 @@ export function SwapInterface() {
   const { tokens, isLoading: isDiscovering } = useTokenStore();
   const [supportedGasTokens, setSupportedGasTokens] = useState<string[]>([]); // from developer settings
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
-  const [reachableTokenIds, setReachableTokenIds] = useState<Set<string> | null>(null);
-  const [isLoadingReachable, setIsLoadingReachable] = useState(false);
-  // Cache: tokenId → Set of reachable output tokenIds (persists for the session)
-  const reachableCache = React.useRef<Map<string, Set<string>>>(new Map());
   const gasDropdownRef = React.useRef<HTMLDivElement>(null);
 
   // Close gas dropdown on outside click
@@ -321,50 +317,6 @@ export function SwapInterface() {
     }
   }, [state.gaslessMode, state.selectedGasToken]);
 
-  // When input token changes, fetch which output tokens Bitflow can route to.
-  // This only affects the buy token dropdown filter — it does NOT block quotes.
-  useEffect(() => {
-    if (!state.inputToken?.tokenId) {
-      setReachableTokenIds(null);
-      setIsLoadingReachable(false);
-      return;
-    }
-    const tokenId = state.inputToken.tokenId;
-
-    // Serve from cache instantly — no spinner, no delay
-    if (reachableCache.current.has(tokenId)) {
-      setReachableTokenIds(reachableCache.current.get(tokenId)!);
-      setIsLoadingReachable(false);
-      return;
-    }
-
-    // Not cached yet — fetch in background, show full token list in the meantime
-    // (isLoadingReachable=true passes full list to TokenInput, not a spinner)
-    let cancelled = false;
-    setIsLoadingReachable(true);
-    const fetchReachable = async () => {
-      try {
-        const bitflow = getBitflowSDK();
-        const reachable = await bitflow.getAllPossibleTokenY(tokenId);
-        const reachableSet = new Set(reachable);
-        reachableCache.current.set(tokenId, reachableSet);
-        if (!cancelled) {
-          setReachableTokenIds(reachableSet);
-          setIsLoadingReachable(false);
-        }
-      } catch (e) {
-        console.warn('[Swap] Failed to fetch reachable tokens:', e);
-        reachableCache.current.set(tokenId, new Set());
-        if (!cancelled) {
-          setReachableTokenIds(new Set());
-          setIsLoadingReachable(false);
-        }
-      }
-    };
-    fetchReachable();
-    return () => { cancelled = true; };
-  }, [state.inputToken?.tokenId]);
-
   useEffect(() => {
     if (state.inputToken && state.outputToken && state.inputAmount && parseFloat(state.inputAmount) > 0) {
       const timer = setTimeout(() => {
@@ -497,7 +449,7 @@ export function SwapInterface() {
         console.log('[Swap] Generating params for route:', bestRoute);
 
         const swapParams = await bitflow.getSwapParams({
-          route: bestRoute.route,
+          route: bestRoute,
           amount: amountIn,
           tokenXDecimals: state.inputToken.decimals,
           tokenYDecimals: state.outputToken.decimals,
@@ -656,19 +608,10 @@ export function SwapInterface() {
             setAmount={() => { }}
             token={state.outputToken}
             setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
-            tokens={
-              // While loading, show full list. Once loaded, filter to reachable tokens.
-              // If reachableTokenIds is an empty Set (no pairs), pass empty array — TokenInput
-              // will show the "No pairs found" empty state via isLoadingTokens=false + empty list.
-              isLoadingReachable
-                ? tokens
-                : reachableTokenIds !== null
-                  ? tokens.filter(t => t.tokenId && reachableTokenIds.has(t.tokenId))
-                  : tokens
-            }
+            tokens={tokens}
             balance={getBalance(state.outputToken)}
             isProcessing={state.isProcessing}
-            isLoadingTokens={isLoadingReachable}
+            isLoadingTokens={isDiscovering}
             variant="blue"
             getTokenBalance={getBalance}
           />
