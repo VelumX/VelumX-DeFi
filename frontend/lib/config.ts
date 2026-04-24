@@ -40,7 +40,7 @@ export function getConfig(): FrontendConfig {
     // VelumX DeFi Paymaster — the deployed paymaster contract for USER_PAYS flows.
     // Developers using VelumX SDK set this to their own paymaster contract address.
     // VelumX DeFi uses velumx-defi-paymaster-v1 as the reference implementation.
-    velumxPaymasterAddress: process.env.NEXT_PUBLIC_VELUMX_DEFI_PAYMASTER_ADDRESS || (isMainnet ? 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.velumx-defi-paymaster-v1' : ''),
+    velumxPaymasterAddress: process.env.NEXT_PUBLIC_VELUMX_DEFI_PAYMASTER_ADDRESS || (isMainnet ? 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.velumx-defi-paymaster-v1-1' : ''),
 
     // Domain IDs (Stacks USDCx bridging)
     ethereumDomainId: parseInt(process.env.NEXT_PUBLIC_ETHEREUM_DOMAIN_ID || '0'), // Ethereum

@@ -133,6 +133,46 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     return true;
   };
 
+  // Contracts that implement bitflow-router-trait (swap-x-for-y) and are
+  // callable by the paymaster's swap-bitflow-router function.
+  const PAYMASTER_COMPATIBLE_ROUTERS = new Set([
+    'router-stx-ststx-bitflow-alex-v-2-1',
+    'router-stx-ststx-bitflow-alex-v-1-2',
+    'router-stx-ststx-bitflow-alex-v-1-1',
+    'router-stx-ststx-bitflow-velar-v-1-2',
+    'router-stx-ststx-bitflow-arkadiko-v-1-1',
+    'router-stx-ststx-bitflow-xyk-v-1-1',
+    'router-stx-usda-arkadiko-alex-v-1-1',
+    'router-stableswap-xyk-v-1-3',
+    'router-xyk-arkadiko-v-1-1',
+    'router-xyk-alex-v-1-1',
+    'router-xyk-alex-v-1-2',
+    'router-velar-alex-v-1-1',
+    'router-velar-alex-v-1-2',
+  ]);
+
+  // Velar routers use swap-helper-a/b/c/d with tuple trait args — not compatible
+  // with bitflow-router-trait, but the paymaster has dedicated hardcoded functions
+  // for them (swap-velar-xyk-router-* and swap-velar-stableswap-router-*).
+  const VELAR_XYK_ROUTER = 'router-xyk-velar-v-1-4';
+  const VELAR_SS_ROUTER  = 'router-stableswap-velar-v-1-5';
+
+  const isPaymasterCompatible = (contractStr: string): boolean => {
+    if (!contractStr?.includes('.')) return false;
+    const [addr, name] = contractStr.split('.');
+    const fullKey = `${addr}.${name}`;
+    // Resolve to mainnet address first
+    const resolved = FULL_CONTRACT_OVERRIDES[fullKey] || `${MAINNET_CONTRACT_MAP[addr] || addr}.${name}`;
+    const resolvedName = resolved.split('.')[1] || '';
+    // Stableswap pools always implement the trait
+    if (resolvedName.startsWith('stableswap-')) return true;
+    // Velar routers have dedicated paymaster wrapper functions
+    if (resolvedName === VELAR_XYK_ROUTER || resolvedName === VELAR_SS_ROUTER) return true;
+    // Only allow known-compatible routers
+    if (PAYMASTER_COMPATIBLE_ROUTERS.has(resolvedName)) return true;
+    return false;
+  };
+
   // Collect all routes with a valid quote, sorted best-first.
   // The retry loop will attempt each one and skip via ABI 404 if not deployed.
   const sortedRoutes = [...(quoteResult.allRoutes || [])]
@@ -147,13 +187,21 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   if (validRoutes.length === 0 && quoteResult.bestRoute) validRoutes.push(quoteResult.bestRoute);
   if (validRoutes.length === 0) throw new Error('No swap route found on Bitflow');
 
-  const bestRoute = validRoutes[0];
+  // For USER_PAYS, prefer paymaster-compatible routes. Fall back to all valid
+  // routes only if no compatible route exists (will use DEVELOPER_SPONSORS path).
+  const paymasterRoutes = validRoutes.filter(r => {
+    const contract = (r as any).swapData?.contract || '';
+    return isPaymasterCompatible(contract);
+  });
+
+  const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
   console.log('[Bitflow] Selected route:', {
     contract: (bestRoute as any).swapData?.contract,
     fn: (bestRoute as any).swapData?.function,
     quote: bestRoute.quote,
     dexPath: (bestRoute as any).dexPath,
+    paymasterCompatible: paymasterRoutes.length > 0,
   });
 
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
@@ -321,7 +369,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     //
     // We determine which paymaster function to call based on the Bitflow route's
     // swapData.contract — stableswap pools use swap-bitflow-stableswap[/reverse],
-    // router contracts use swap-bitflow-router.
+    // standard routers use swap-bitflow-router, and Velar routers use the dedicated
+    // swap-velar-xyk-router-* / swap-velar-stableswap-router-* functions.
     const swapData = (bestRoute as any).swapData as { contract: string; function: string; parameters: Record<string, any> };
     const routeParams = swapData?.parameters || {};
     const poolId: number = routeParams['id'] || routeParams['pool-id'] || 1;
@@ -337,12 +386,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       resolvedPool = `${resolvedAddr}.${poolName}`;
     }
 
-    // Determine if this is a stableswap pool or a router.
-    // A contract is a stableswap POOL only if its name starts with "stableswap-".
-    // Contracts like "router-stableswap-velar-v-1-5" contain "stableswap" but are routers.
     const contractName = resolvedPool.split('.')[1] || '';
     const isStableswap = contractName.startsWith('stableswap-');
-    const isReverse = swapData.function === 'swap-y-for-x';
+    const isVelarXyk = contractName === VELAR_XYK_ROUTER;
+    const isVelarSS  = contractName === VELAR_SS_ROUTER;
+    const isReverse  = swapData.function === 'swap-y-for-x';
 
     const [paymasterAddr, paymasterName] = config.velumxPaymasterAddress.split('.');
     const [feeTokenAddr, feeTokenName] = feeToken.split('.');
@@ -350,29 +398,62 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const [tokenOutAddr, tokenOutName] = params.tokenOut.split('.');
     const [poolContractAddr, poolContractName] = resolvedPool.split('.');
 
-    let functionName: string;
-    if (isStableswap && isReverse) {
-      functionName = 'swap-bitflow-stableswap-reverse';
-    } else if (isStableswap) {
-      functionName = 'swap-bitflow-stableswap';
+    if (isVelarXyk || isVelarSS) {
+      // Velar routers use swap-helper-a/b/c/d with tuple trait args.
+      // The paymaster has dedicated hardcoded wrapper functions for each hop count.
+      // We use getSwapParams to get the SDK-built args, then map the function name
+      // and append the fee args.
+      const patchedRoute = {
+        ...((bestRoute as any).route || bestRoute),
+        swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
+      };
+      const swapParams = await bitflow.getSwapParams(
+        { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
+        userAddress,
+        0.01
+      );
+
+      // Map swap-helper-{a,b,c,d} → swap-velar-{xyk,stableswap}-router-{a,b,c,d}
+      const hopSuffix = swapParams.functionName.replace('swap-helper-', ''); // 'a', 'b', 'c', or 'd'
+      const prefix = isVelarXyk ? 'swap-velar-xyk-router' : 'swap-velar-stableswap-router';
+      const functionName = `${prefix}-${hopSuffix}`;
+
+      // The SDK args are the first N positional args for the Velar router call.
+      // The paymaster wrapper appends fee-amount, relayer, fee-token at the end.
+      const functionArgs = [
+        ...swapParams.functionArgs,
+        uintCV(BigInt(feeAmount)),
+        principalCV(relayerAddress!),
+        contractPrincipalCV(feeTokenAddr, feeTokenName),
+      ];
+
+      txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
+      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1 Velar)', { functionName, router: resolvedPool });
     } else {
-      functionName = 'swap-bitflow-router';
+      let functionName: string;
+      if (isStableswap && isReverse) {
+        functionName = 'swap-bitflow-stableswap-reverse';
+      } else if (isStableswap) {
+        functionName = 'swap-bitflow-stableswap';
+      } else {
+        functionName = 'swap-bitflow-router';
+      }
+
+      const functionArgs = [
+        contractPrincipalCV(poolContractAddr, poolContractName),  // pool / router
+        uintCV(poolId),                                            // id
+        contractPrincipalCV(tokenInAddr, tokenInName),             // token-x
+        contractPrincipalCV(tokenOutAddr, tokenOutName),           // token-y
+        uintCV(amountInRaw),                                       // amount-in
+        uintCV(minAmountOutRaw),                                   // min-amount-out
+        uintCV(BigInt(feeAmount)),                                 // fee-amount
+        principalCV(relayerAddress!),                              // relayer
+        contractPrincipalCV(feeTokenAddr, feeTokenName),           // fee-token
+      ];
+
+      txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
+      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', { functionName, pool: resolvedPool });
     }
-
-    const functionArgs = [
-      contractPrincipalCV(poolContractAddr, poolContractName),  // pool / router
-      uintCV(poolId),                                            // id
-      contractPrincipalCV(tokenInAddr, tokenInName),             // token-x
-      contractPrincipalCV(tokenOutAddr, tokenOutName),           // token-y
-      uintCV(amountInRaw),                                       // amount-in
-      uintCV(minAmountOutRaw),                                   // min-amount-out
-      uintCV(BigInt(feeAmount)),                                 // fee-amount
-      principalCV(relayerAddress!),                              // relayer
-      contractPrincipalCV(feeTokenAddr, feeTokenName),           // fee-token
-    ];
-
-    txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
-    console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', { functionName, pool: resolvedPool });
   }
 
   // 5. Build unsigned sponsored tx, then request wallet signature (no broadcast)
