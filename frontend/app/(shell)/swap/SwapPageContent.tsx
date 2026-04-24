@@ -2,6 +2,11 @@
 
 import dynamic from 'next/dynamic';
 import { Shield, Zap, Repeat } from 'lucide-react';
+import { prefetchTokens } from '@/lib/hooks/useTokenStore';
+
+// Kick off the Bitflow token fetch immediately when this module loads —
+// before SwapInterface (which is lazy-loaded) even begins mounting.
+prefetchTokens();
 
 const SwapInterface = dynamic(
   () => import('@/components/SwapInterface').then((mod) => mod.SwapInterface),

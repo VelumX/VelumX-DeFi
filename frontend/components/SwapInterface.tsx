@@ -15,6 +15,7 @@ import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
 import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '@/lib/bitflow';
+import { useTokenStore } from '@/lib/hooks/useTokenStore';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
@@ -137,8 +138,7 @@ export function SwapInterface() {
     return (balances as any)[token.symbol.toLowerCase()] || '0';
   };
 
-  const [tokens, setTokens] = useState<Token[]>([]);
-  const [isDiscovering, setIsDiscovering] = useState(false);
+  const { tokens, isLoading: isDiscovering } = useTokenStore();
   const [supportedGasTokens, setSupportedGasTokens] = useState<string[]>([]); // from developer settings
   const [sponsorshipPolicy, setSponsorshipPolicy] = useState<string>('USER_PAYS');
   const [reachableTokenIds, setReachableTokenIds] = useState<Set<string> | null>(null);
@@ -214,146 +214,25 @@ export function SwapInterface() {
     isRegistering: false,
   });
 
-  // Dynamic Token Discovery via Bitflow SDK
+  // Auto-select default tokens once the shared store has tokens
   useEffect(() => {
-    let isMounted = true;
-
-    const CACHE_KEY = 'velumx_bitflow_tokens_v1';
-    const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-    const mapTokens = (list: any[]): Token[] =>
-      list
-        .filter((t: any) => {
-          // Keep only tokens that live on Stacks (have a Stacks contract principal).
-          // This excludes pure L1 assets (BTC, ETH) while keeping bridged tokens
-          // like USDCx that are deployed as SIP-010 contracts on Stacks and have
-          // Bitflow liquidity. Route availability is enforced separately via
-          // getAllPossibleTokenY when the user selects an input token.
-          const isStx = t['token-id'] === 'token-stx' || t.tokenId === 'token-stx';
-          const hasStacksContract = t.tokenContract && (
-            t.tokenContract.startsWith('SP')
-          );
-          return isStx || hasStacksContract;
-        })
-        .map((t: any) => {
-          const contractAddress = t.tokenContract || (t.tokenId === 'token-stx' ? 'STX' : '');
-          const logoUrl = t.logoUrl || t.icon || t.logo_url || '';
-          return {
-            symbol: t.symbol || 'Unknown',
-            name: t.name || t.symbol || 'Unknown Token',
-            address: contractAddress,
-            decimals: t.tokenDecimals || 6,
-            logoUrl,
-            tokenId: t.tokenId,
-          };
-        })
-        .filter(t =>
-          t.symbol !== 'Unknown' &&
-          (t.address?.includes('.') || t.symbol === 'STX' || t.tokenId?.startsWith('token-'))
-        );
-
-    const applyTokens = (mapped: Token[]) => {
-      if (!isMounted) return;
-      console.log(`[Swap] Discovery Complete: ${mapped.length} tokens found`);
-      setTokens(mapped);
-
-      // Preload all possible swap pairs in parallel (batched to avoid rate limits)
-      const preloadSwapPairs = async () => {
-        try {
-          const bitflow = getBitflowSDK();
-          const BATCH_SIZE = 5;
-          const tokensWithId = mapped.filter(t => t.tokenId);
-          for (let i = 0; i < tokensWithId.length; i += BATCH_SIZE) {
-            const batch = tokensWithId.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async token => {
-              if (reachableCache.current.has(token.tokenId!)) return; // already cached
-              try {
-                const reachable = await bitflow.getAllPossibleTokenY(token.tokenId!);
-                reachableCache.current.set(token.tokenId!, new Set(reachable));
-              } catch (e) {
-                console.warn(`[Swap] Failed to preload pairs for ${token.symbol}:`, e);
-                reachableCache.current.set(token.tokenId!, new Set());
-              }
-            }));
-          }
-          console.log(`[Swap] Preloaded swap pairs for ${reachableCache.current.size} tokens`);
-        } catch (e) {
-          console.warn('[Swap] Swap pair preload failed:', e);
-        }
+    if (tokens.length === 0) return;
+    setState(prev => {
+      if (prev.inputToken && prev.outputToken) return prev;
+      const stx = tokens.find(t => t.symbol === 'STX' || t.tokenId === 'token-stx');
+      const usdcx = tokens.find(t => t.symbol === 'USDCx');
+      const aeusdc = tokens.find(t => t.symbol === 'aeUSDC');
+      const usda = tokens.find(t => t.symbol === 'USDA');
+      const defaultStable = usdcx || aeusdc || usda || tokens[1];
+      return {
+        ...prev,
+        inputToken: prev.inputToken || stx || tokens[0] || null,
+        outputToken: prev.outputToken || defaultStable || tokens[1] || null,
+        selectedGasToken: prev.selectedGasToken || defaultStable || stx || tokens[0] || null,
       };
-      preloadSwapPairs();
-
-      // Auto-select defaults once tokens are discovered
-      setState(prev => {
-        if (prev.inputToken && prev.outputToken) return prev;
-        
-        // Find best candidates for defaults
-        const stx = mapped.find(t => t.symbol === 'STX' || t.tokenId === 'token-stx');
-        const usdcx = mapped.find(t => t.symbol === 'USDCx');
-        const aeusdc = mapped.find(t => t.symbol === 'aeUSDC');
-        const usda = mapped.find(t => t.symbol === 'USDA');
-        
-        // Prioritize USDCx as the default stable, fallback to others if missing
-        const defaultStable = usdcx || aeusdc || usda || mapped[1];
-        
-        console.log(`[Swap] Setting defaults — STX: ${!!stx}, USDCx: ${!!usdcx}, aeUSDC: ${!!aeusdc}, USDA: ${!!usda}`);
-        
-        return {
-          ...prev,
-          inputToken: prev.inputToken || stx || mapped[0] || null,
-          outputToken: prev.outputToken || defaultStable || mapped[1] || null,
-          selectedGasToken: prev.selectedGasToken || defaultStable || stx || mapped[0] || null,
-        };
-      });
-    };
-
-    const fetchBitflowTokens = async () => {
-      try {
-        setIsDiscovering(true);
-
-        // ── 1. Serve from localStorage cache immediately (instant render) ──
-        try {
-          const cached = localStorage.getItem(CACHE_KEY);
-          if (cached) {
-            const { timestamp, data } = JSON.parse(cached);
-            if (Date.now() - timestamp < CACHE_TTL && data?.length > 0) {
-              applyTokens(mapTokens(data));
-              setIsDiscovering(false);
-              // Still refresh in background so cache stays fresh
-              const bitflow = getBitflowSDK();
-              bitflow.getAvailableTokens().then(fresh => {
-                if (fresh?.length > 0) {
-                  applyTokens(mapTokens(fresh));
-                  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh })); } catch (e) {}
-                }
-              }).catch(() => {});
-              return;
-            }
-          }
-        } catch (e) {}
-
-        // ── 2. No valid cache — fetch fresh ──
-        const bitflow = getBitflowSDK();
-        const bitflowTokens = await bitflow.getAvailableTokens();
-        
-        if (bitflowTokens?.length > 0) {
-          applyTokens(mapTokens(bitflowTokens));
-          try {
-            localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: bitflowTokens }));
-          } catch (e) {}
-        }
-      } catch (e) {
-        console.error("Swap: Discovery Critical Failure", e);
-      } finally {
-        if (isMounted) setIsDiscovering(false);
-      }
-    };
-
-    fetchBitflowTokens();
-    return () => { isMounted = false; };
-  }, []);
-
-  // Merging wallet tokens removed to remain fully reliant on Bitflow SDK
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokens]);
   const fetchQuote = async () => {
     if (!state.inputToken || !state.outputToken || !state.inputAmount) return;
 
@@ -708,12 +587,30 @@ export function SwapInterface() {
           <span className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
             {isDiscovering ? 'Discovering Liquidity...' : `${tokens.length} Assets Synchronized`}
           </span>
-          {tokens.length <= 1 && isDiscovering && (
+          {isDiscovering && (
              <span className="text-[10px] font-bold text-purple-500 ml-2 animate-pulse">
                Connecting...
              </span>
           )}
         </div>
+
+        {/* Skeleton UI — shown while tokens are loading for the first time */}
+        {isDiscovering && tokens.length === 0 && (
+          <div className="space-y-3 mb-4 animate-pulse">
+            {[0, 1].map(i => (
+              <div key={i} className="rounded-2xl p-6" style={{ border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-surface)' }}>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="h-3 w-8 rounded" style={{ backgroundColor: 'var(--border-color)' }} />
+                  <div className="h-3 w-24 rounded" style={{ backgroundColor: 'var(--border-color)' }} />
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="h-10 w-32 rounded" style={{ backgroundColor: 'var(--border-color)' }} />
+                  <div className="h-10 w-28 rounded-xl" style={{ backgroundColor: 'var(--border-color)' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <SettingsPanel
           slippage={state.slippage}

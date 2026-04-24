@@ -7,7 +7,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useWallet } from '@/lib/hooks/useWallet';
 import { Plus, Trash2, Loader2, AlertTriangle, Layers, Info, ChevronDown, CheckCircle2, Zap } from 'lucide-react';
-import { quoteSweep, executeSweep, getAvailableTokens, type DexType, type SweepToken, WSTX_PRINCIPAL } from '@/lib/helpers/batch-swap';
+import { quoteSweep, executeSweep, type DexType, type SweepToken, WSTX_PRINCIPAL } from '@/lib/helpers/batch-swap';
+import { useTokenStore } from '@/lib/hooks/useTokenStore';
 
 interface Token {
   tokenId: string;
@@ -128,8 +129,15 @@ function TokenDropdown({ tokens, value, onChange, getBalance, disabled, usedAddr
 // ---- Main Component ----
 export function BatchSwapInterface() {
   const { stacksAddress, stacksConnected, balances } = useWallet();
-  const [tokens, setTokens] = useState<Token[]>([]);
-  const [isLoadingTokens, setIsLoadingTokens] = useState(true);
+  // Use the shared token store — no separate fetch, no duplicate cache key
+  const { tokens: allTokens, isLoading: isLoadingTokens } = useTokenStore();
+  // Filter to tokens valid for sweep (exclude wSTX, require dot in address)
+  const tokens = React.useMemo(
+    () => allTokens
+      .filter(t => t.address.includes('.') && t.address !== WSTX_PRINCIPAL)
+      .map(t => ({ ...t, source: 'bitflow' as const })),
+    [allTokens]
+  );
   const [rows, setRows] = useState<SwapRow[]>([{ id: '1', token: null, amount: '', quote: null }]);
   const [slippage, setSlippage] = useState(0.5);
   const [totalStxOut, setTotalStxOut] = useState<string | null>(null);
@@ -175,54 +183,6 @@ export function BatchSwapInterface() {
 
     return '0';
   };
-
-  // Load tokens from Bitflow SDK
-  useEffect(() => {
-    let cancelled = false;
-    const CACHE_KEY = 'velumx_sweep_tokens_v8';
-    const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
-
-    const load = async () => {
-      setIsLoadingTokens(true);
-      try {
-        const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) {
-          const { ts, data } = JSON.parse(cached);
-          if (Date.now() - ts < CACHE_TTL && data?.length > 0 && !cancelled) {
-            setTokens(data); setIsLoadingTokens(false);
-          }
-        }
-      } catch {}
-
-      try {
-        const bitflowTokens = await getAvailableTokens();
-        if (cancelled) return;
-
-        const mapped: Token[] = bitflowTokens
-          .filter(t => t.tokenContract && t.tokenContract.includes('.') && t.tokenContract !== WSTX_PRINCIPAL)
-          .map(t => ({
-            tokenId: t.tokenId,
-            symbol: t.symbol,
-            name: t.name || t.symbol,
-            address: t.tokenContract!,
-            decimals: t.tokenDecimals ?? 6,
-            source: 'bitflow' as const,
-          }));
-
-        if (!cancelled && mapped.length > 0) {
-          setTokens(mapped);
-          try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: mapped })); } catch {}
-        }
-      } catch (e) {
-        console.warn('[sweep] Failed to load Bitflow tokens:', e);
-      }
-
-      if (!cancelled) setIsLoadingTokens(false);
-    };
-
-    load().catch(() => { if (!cancelled) setIsLoadingTokens(false); });
-    return () => { cancelled = true; };
-  }, []);
 
   // Quote all rows — use a stable key to avoid re-triggering on quote updates
   const rowInputKey = rows.map(r => `${r.token?.address}:${r.amount}`).join('|');
