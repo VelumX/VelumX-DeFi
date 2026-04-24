@@ -422,14 +422,55 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       //   2. quoteData.parameters (alternate parameter bag on the same route)
       //   3. route.token_path / route.pool_path (SelectedSwapRoute fields)
       //   4. top-level RouteQuote.tokenPath (SDK-normalised field)
+      //   5. Derive from postConditions token contracts + known tokenIn/tokenOut principals
       const quoteParams = (bestRoute as any).quoteData?.parameters || {};
-      const tokenPath: string[] =
+      let tokenPath: string[] =
         (routeParams['token-path']?.length  ? routeParams['token-path']  : null) ||
         (routeParams['tokenPath']?.length   ? routeParams['tokenPath']   : null) ||
         (quoteParams['token-path']?.length  ? quoteParams['token-path']  : null) ||
         ((bestRoute as any).route?.token_path?.length ? (bestRoute as any).route.token_path : null) ||
         ((bestRoute as any).tokenPath?.length         ? (bestRoute as any).tokenPath         : null) ||
         [];
+
+      // Last resort: derive token path from postConditions.
+      // The route's postConditions map always contains the SIP-010 contract principals
+      // for every token involved in the swap (keyed by sender address).
+      // We know tokenIn = params.tokenIn and tokenOut = params.tokenOut (contract principals).
+      // Intermediate tokens are the postCondition tokenContracts that are neither tokenIn nor tokenOut.
+      if (tokenPath.length === 0) {
+        const postConds: Record<string, { tokenContract: string; shareFeeContract: string | null }> =
+          (bestRoute as any).route?.postConditions || (bestRoute as any).postConditions || {};
+        const pcContracts = Object.values(postConds)
+          .map((pc: any) => pc?.tokenContract)
+          .filter((c): c is string => !!c && c.includes('.'));
+
+        const tokenInPrincipal  = params.tokenIn.includes('.')  ? params.tokenIn  : '';
+        const tokenOutPrincipal = params.tokenOut.includes('.') ? params.tokenOut : '';
+
+        // Resolve tokenIn/tokenOut to mainnet principals for comparison
+        const resolveForCompare = (p: string) => {
+          if (!p?.includes('.')) return p;
+          const [a, n] = p.split('.');
+          const full = `${a}.${n}`;
+          if (FULL_CONTRACT_OVERRIDES[full]) return FULL_CONTRACT_OVERRIDES[full];
+          return `${MAINNET_CONTRACT_MAP[a] || a}.${n}`;
+        };
+        const resolvedTokenIn  = resolveForCompare(tokenInPrincipal);
+        const resolvedTokenOut = resolveForCompare(tokenOutPrincipal);
+
+        // Intermediate tokens = postCondition contracts that aren't tokenIn or tokenOut
+        const intermediates = pcContracts
+          .map(resolveForCompare)
+          .filter(c => c !== resolvedTokenIn && c !== resolvedTokenOut);
+
+        // Build ordered path: [tokenIn, ...intermediates, tokenOut]
+        // For swap-helper-b (2-hop) we need exactly 3 tokens
+        if (resolvedTokenIn && resolvedTokenOut) {
+          tokenPath = [resolvedTokenIn, ...intermediates, resolvedTokenOut];
+          console.log('[Velar] Derived token-path from postConditions:', tokenPath);
+        }
+      }
+
       const poolPath: string[] =
         (routeParams['pool-path']?.length  ? routeParams['pool-path']  : null) ||
         (routeParams['poolPath']?.length   ? routeParams['poolPath']   : null) ||
@@ -477,9 +518,17 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       const minOut = Math.floor((bestRoute.quote ?? 0) * 0.99 * Math.pow(10, params.tokenOutDecimals));
 
       // tokenPath must contain contract principals (e.g. "SP...token-welsh").
-      // params.tokenIn/tokenOut are Bitflow token IDs (e.g. "token-welsh") — NOT principals.
-      // If tokenPath is still empty after all fallbacks, we cannot safely build the args.
+      // If still empty after all fallbacks including postConditions derivation, log and throw.
       if (tokenPath.length === 0) {
+        console.error('[Velar] token-path empty after all fallbacks. Route data:', JSON.stringify({
+          swapDataParams: routeParams,
+          quoteDataParams: quoteParams,
+          routeTokenPath: (bestRoute as any).route?.token_path,
+          topLevelTokenPath: (bestRoute as any).tokenPath,
+          postConditions: (bestRoute as any).route?.postConditions || (bestRoute as any).postConditions,
+          tokenIn: params.tokenIn,
+          tokenOut: params.tokenOut,
+        }));
         throw new Error(
           `Velar ${isVelarSS ? 'stableswap' : 'XYK'} router route (${swapData.function}) requires a token-path ` +
           `but none was found in the route data. Cannot build paymaster args safely.`
