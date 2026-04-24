@@ -2,14 +2,13 @@ import { BitflowSDK } from '@bitflowlabs/core-sdk';
 
 /**
  * Bitflow SDK configuration.
- * BITFLOW_API_HOST is their single public gateway (the "test" in the name is
- * just the gateway identifier — it is the production endpoint per Bitflow docs).
- * Routes from this API may contain simnet contract addresses for some DEX
- * integrations; these are mapped to mainnet equivalents in bitflow-gasless-swap.ts.
+ * API calls are routed through Next.js rewrites (/api/bitflow → api.bitflowapis.finance)
+ * to avoid CORS restrictions when running in the browser. The rewrites are
+ * defined in next.config.ts and execute server-side on Vercel.
  */
 export const BITFLOW_CONFIG = {
-  BITFLOW_API_HOST: 'https://api.bitflowapis.finance',
-  READONLY_CALL_API_HOST: 'https://node.bitflowapis.finance',
+  BITFLOW_API_HOST: '/api/bitflow',
+  READONLY_CALL_API_HOST: '/api/bitflow-node',
   BITFLOW_PROVIDER_ADDRESS: 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV',
 };
 

@@ -134,8 +134,8 @@ export function BatchSwapInterface() {
   // Filter to tokens valid for sweep (exclude wSTX, require dot in address)
   const tokens = React.useMemo(
     () => allTokens
-      .filter(t => t.address.includes('.') && t.address !== WSTX_PRINCIPAL)
-      .map(t => ({ ...t, source: 'bitflow' as const })),
+      .filter(t => t.address.includes('.') && t.address !== WSTX_PRINCIPAL && !!t.tokenId)
+      .map(t => ({ ...t, tokenId: t.tokenId!, source: 'bitflow' as const })),
     [allTokens]
   );
   const [rows, setRows] = useState<SwapRow[]>([{ id: '1', token: null, amount: '', quote: null }]);
