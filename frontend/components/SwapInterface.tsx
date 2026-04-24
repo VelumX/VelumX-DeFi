@@ -405,6 +405,11 @@ export function SwapInterface() {
           tokenOutDecimals: state.outputToken.decimals,
           feeToken: state.selectedGasToken?.address || '',
           sponsorshipPolicy: sponsorshipPolicy,
+          quoteResult: state.quote ? {
+            bestRoute: state.quote.bestRoute,
+            allRoutes: state.quote.allRoutes ?? [],
+            inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
+          } : undefined,
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }
