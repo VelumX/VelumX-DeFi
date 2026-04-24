@@ -432,22 +432,28 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ((bestRoute as any).tokenPath?.length         ? (bestRoute as any).tokenPath         : null) ||
         [];
 
-      // Last resort: derive token path from postConditions.
-      // The route's postConditions map always contains the SIP-010 contract principals
-      // for every token involved in the swap (keyed by sender address).
-      // We know tokenIn = params.tokenIn and tokenOut = params.tokenOut (contract principals).
-      // Intermediate tokens are the postCondition tokenContracts that are neither tokenIn nor tokenOut.
+      // Last resort: derive token path from postConditions + SDK token list.
+      // params.tokenIn/tokenOut may be Bitflow token IDs (e.g. "token-welsh"), not principals.
+      // Look up the actual contract principals from the SDK's token list.
       if (tokenPath.length === 0) {
-        const postConds: Record<string, { tokenContract: string; shareFeeContract: string | null }> =
-          (bestRoute as any).route?.postConditions || (bestRoute as any).postConditions || {};
-        const pcContracts = Object.values(postConds)
-          .map((pc: any) => pc?.tokenContract)
-          .filter((c): c is string => !!c && c.includes('.'));
+        const sdkCtx = (bitflow as any).context;
+        const findContract = (tokenId: string, tokenAddress: string): string => {
+          // Try SDK token list first (most reliable)
+          if (sdkCtx?.availableTokens?.length > 0) {
+            const t = sdkCtx.availableTokens.find(
+              (tok: any) => tok.tokenId === tokenId || tok.tokenContract === tokenAddress
+            );
+            if (t?.tokenContract?.includes('.')) return t.tokenContract;
+          }
+          // Fall back to the address if it's already a principal
+          if (tokenAddress?.includes('.')) return tokenAddress;
+          return '';
+        };
 
-        const tokenInPrincipal  = params.tokenIn.includes('.')  ? params.tokenIn  : '';
-        const tokenOutPrincipal = params.tokenOut.includes('.') ? params.tokenOut : '';
+        const tokenInContract  = findContract(params.tokenInId,  params.tokenIn);
+        const tokenOutContract = findContract(params.tokenOutId, params.tokenOut);
 
-        // Resolve tokenIn/tokenOut to mainnet principals for comparison
+        // Resolve to mainnet
         const resolveForCompare = (p: string) => {
           if (!p?.includes('.')) return p;
           const [a, n] = p.split('.');
@@ -455,19 +461,24 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           if (FULL_CONTRACT_OVERRIDES[full]) return FULL_CONTRACT_OVERRIDES[full];
           return `${MAINNET_CONTRACT_MAP[a] || a}.${n}`;
         };
-        const resolvedTokenIn  = resolveForCompare(tokenInPrincipal);
-        const resolvedTokenOut = resolveForCompare(tokenOutPrincipal);
+        const resolvedTokenIn  = resolveForCompare(tokenInContract);
+        const resolvedTokenOut = resolveForCompare(tokenOutContract);
 
-        // Intermediate tokens = postCondition contracts that aren't tokenIn or tokenOut
-        const intermediates = pcContracts
-          .map(resolveForCompare)
-          .filter(c => c !== resolvedTokenIn && c !== resolvedTokenOut);
+        // Extract intermediate tokens from postConditions
+        const postConds: Record<string, any> =
+          (bestRoute as any).route?.postConditions || (bestRoute as any).postConditions || {};
+        const pcContracts = Object.values(postConds)
+          .map((pc: any) => pc?.tokenContract)
+          .filter((c): c is string => !!c && c.includes('.'))
+          .map(resolveForCompare);
 
-        // Build ordered path: [tokenIn, ...intermediates, tokenOut]
-        // For swap-helper-b (2-hop) we need exactly 3 tokens
+        const intermediates = pcContracts.filter(
+          c => c !== resolvedTokenIn && c !== resolvedTokenOut
+        );
+
         if (resolvedTokenIn && resolvedTokenOut) {
           tokenPath = [resolvedTokenIn, ...intermediates, resolvedTokenOut];
-          console.log('[Velar] Derived token-path from postConditions:', tokenPath);
+          console.log('[Velar] Derived token-path from SDK token list + postConditions:', tokenPath);
         }
       }
 
