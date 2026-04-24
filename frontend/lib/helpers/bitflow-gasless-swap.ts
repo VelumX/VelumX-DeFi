@@ -431,17 +431,25 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ((bestRoute as any).route?.pool_path?.length ? (bestRoute as any).route.pool_path : null) ||
         [];
       const swapsReversed: boolean = routeParams['swaps-reversed'] ?? false;
-      const provider: string | null = routeParams['provider'] || null;
+
+      // provider must be a valid Stacks address (starts with 'S') — ignore anything else
+      const rawProvider: string | null = routeParams['provider'] || null;
+      const provider: string | null = (rawProvider && rawProvider.startsWith('S') && !rawProvider.includes('.'))
+        ? rawProvider
+        : null;
 
       // Resolve each token/pool principal to mainnet
       const resolveP = (p: string) => {
+        if (!p?.includes('.')) return null; // not a contract principal — skip
         const [a, n] = p.split('.');
         const full = `${a}.${n}`;
         if (FULL_CONTRACT_OVERRIDES[full]) return FULL_CONTRACT_OVERRIDES[full];
         return `${MAINNET_CONTRACT_MAP[a] || a}.${n}`;
       };
       const toCV = (p: string) => {
-        const [a, n] = resolveP(p).split('.');
+        const resolved = resolveP(p);
+        if (!resolved) throw new Error(`Cannot convert non-principal token ID to CV: "${p}". Ensure token-path contains contract principals.`);
+        const [a, n] = resolved.split('.');
         return contractPrincipalCV(a, n);
       };
 
@@ -462,15 +470,25 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // etc.
       const minOut = Math.floor((bestRoute.quote ?? 0) * 0.99 * Math.pow(10, params.tokenOutDecimals));
 
+      // tokenPath must contain contract principals (e.g. "SP...token-welsh").
+      // params.tokenIn/tokenOut are Bitflow token IDs (e.g. "token-welsh") — NOT principals.
+      // If tokenPath is still empty after all fallbacks, we cannot safely build the args.
+      if (tokenPath.length === 0) {
+        throw new Error(
+          `Velar ${isVelarSS ? 'stableswap' : 'XYK'} router route (${swapData.function}) requires a token-path ` +
+          `but none was found in the route data. Cannot build paymaster args safely.`
+        );
+      }
+
       const baseArgs = [
         uintCV(amountInRaw),
         uintCV(minOut),
         provider ? someCV(principalCV(provider)) : noneCV(),
         swapsReversed ? trueCV() : falseCV(),
-        // xyk/ss token-a, token-b
-        toCV(tokenPath[0] || params.tokenIn),
-        toCV(tokenPath[1] || params.tokenOut),
-        // xyk/ss pool-a
+        // ss/xyk token-a, token-b (first two tokens in path)
+        toCV(tokenPath[0]),
+        toCV(tokenPath[1] ?? tokenPath[0]),
+        // ss/xyk pool-a
         toCV(poolPath[0] || resolvedPool),
         // velar tokens (all tokens in path)
         ...tokenPath.map(toCV),
