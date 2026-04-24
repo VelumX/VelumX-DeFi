@@ -409,8 +409,27 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       //   velar-share-fee-to,
       //   fee-amount, relayer, fee-token
 
-      const tokenPath: string[] = routeParams['token-path'] || routeParams['tokenPath'] || [];
-      const poolPath: string[]  = routeParams['pool-path']  || routeParams['poolPath']  || [];
+      // token-path and pool-path are sometimes missing from swapData.parameters
+      // (Bitflow API returns empty arrays for certain Velar stableswap multi-hop routes).
+      // Fall back through all available sources before giving up:
+      //   1. swapData.parameters (primary — usually populated)
+      //   2. quoteData.parameters (alternate parameter bag on the same route)
+      //   3. route.token_path / route.pool_path (SelectedSwapRoute fields)
+      //   4. top-level RouteQuote.tokenPath (SDK-normalised field)
+      const quoteParams = (bestRoute as any).quoteData?.parameters || {};
+      const tokenPath: string[] =
+        (routeParams['token-path']?.length  ? routeParams['token-path']  : null) ||
+        (routeParams['tokenPath']?.length   ? routeParams['tokenPath']   : null) ||
+        (quoteParams['token-path']?.length  ? quoteParams['token-path']  : null) ||
+        ((bestRoute as any).route?.token_path?.length ? (bestRoute as any).route.token_path : null) ||
+        ((bestRoute as any).tokenPath?.length         ? (bestRoute as any).tokenPath         : null) ||
+        [];
+      const poolPath: string[] =
+        (routeParams['pool-path']?.length  ? routeParams['pool-path']  : null) ||
+        (routeParams['poolPath']?.length   ? routeParams['poolPath']   : null) ||
+        (quoteParams['pool-path']?.length  ? quoteParams['pool-path']  : null) ||
+        ((bestRoute as any).route?.pool_path?.length ? (bestRoute as any).route.pool_path : null) ||
+        [];
       const swapsReversed: boolean = routeParams['swaps-reversed'] ?? false;
       const provider: string | null = routeParams['provider'] || null;
 
