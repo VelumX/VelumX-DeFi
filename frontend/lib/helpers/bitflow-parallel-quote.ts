@@ -5,120 +5,102 @@
  * sequentially — one on-chain read-only call per route, awaited one at a time.
  * For token pairs with many routes (e.g. WELSH → USDCx) this can take 2+ mins.
  *
- * This module replaces that with a direct parallel implementation:
- *   1. Get routes from the SDK (single API call, cached)
- *   2. Fetch all unique contract ABIs in parallel (one fetch per contract)
- *   3. Call fetchCallReadOnlyFunction for all routes concurrently
- *   4. Apply decimal scaling and return the same QuoteResult shape
- *
- * Total time = max(ABI fetches) + max(read-only calls) instead of their sum.
+ * Strategy: use the Stacks read-only API directly to call each route's quote
+ * function in parallel, bypassing the SDK's serial loop entirely.
+ * The SDK is still used for route discovery and token metadata.
  */
 
-import { fetchCallReadOnlyFunction } from '@stacks/transactions';
+import { fetchCallReadOnlyFunction, Cl } from '@stacks/transactions';
 import { type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK, BITFLOW_CONFIG } from '@/lib/bitflow';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Fetch a contract's ABI from the Stacks node */
-async function fetchAbi(deployer: string, name: string): Promise<any> {
-  const res = await fetch(
-    `${BITFLOW_CONFIG.READONLY_CALL_API_HOST}/v2/contracts/interface/${deployer}/${name}`,
-    { headers: { Accept: 'application/json', 'Content-Type': 'application/json' } },
-  );
-  if (!res.ok) throw new Error(`ABI fetch failed for ${deployer}.${name}: ${res.status}`);
-  return res.json();
-}
-
-/** Extract function argument definitions from a contract ABI */
-function getFunctionArgs(abi: any, functionName: string): Array<{ name: string; type: any }> {
-  const fn = abi?.functions?.find((f: any) => f.name === functionName);
-  return fn?.args ?? [];
-}
-
-/** Convert a JS value to a Clarity value based on the arg type definition */
-function convertArg(value: any, type: any): any {
-  const { Cl } = require('@stacks/transactions');
-
-  if (value === null || value === undefined) return Cl.none();
-
-  const typeName = typeof type === 'string' ? type : type?.type ?? '';
-
-  if (typeName === 'uint128' || typeName === 'int128') {
-    return typeName === 'uint128' ? Cl.uint(BigInt(Math.floor(Number(value)))) : Cl.int(BigInt(Math.floor(Number(value))));
-  }
-  if (typeName === 'bool') return value ? Cl.bool(true) : Cl.bool(false);
-  if (typeName === 'principal' || typeName === 'trait_reference') {
-    const s = String(value);
-    if (s.includes('.')) {
-      const [addr, cname] = s.split('.');
-      return Cl.contractPrincipal(addr, cname);
-    }
-    return Cl.standardPrincipal(s);
-  }
-  if (typeName === 'optional' || type?.optional) {
-    if (value === null || value === undefined) return Cl.none();
-    return Cl.some(convertArg(value, type.optional ?? type.value));
-  }
-  if (typeName === 'tuple' || type?.tuple) {
-    const fields = type.tuple ?? type.fields ?? [];
-    const obj: Record<string, any> = {};
-    for (const field of fields) {
-      obj[field.name] = convertArg(value?.[field.name], field.type);
-    }
-    return Cl.tuple(obj);
-  }
-  if (typeName === 'list' || type?.list) {
-    const items = Array.isArray(value) ? value : [];
-    return Cl.list(items.map((item: any) => convertArg(item, type.list?.type ?? type.type)));
-  }
-  if (typeName === 'buffer' || type?.buffer) {
-    if (value instanceof Uint8Array) return Cl.buffer(value);
-    if (typeof value === 'string') return Cl.bufferFromHex(value);
-    return Cl.buffer(new Uint8Array());
-  }
-  if (typeName === 'string-ascii' || type?.['string-ascii']) {
-    return Cl.stringAscii(String(value));
-  }
-  if (typeName === 'string-utf8' || type?.['string-utf8']) {
-    return Cl.stringUtf8(String(value));
-  }
-  // Fallback: try uint
-  if (typeof value === 'bigint' || typeof value === 'number') {
-    return Cl.uint(BigInt(Math.floor(Number(value))));
-  }
-  return Cl.none();
-}
-
-/** Unwrap a Clarity result value to a JS number */
-function unwrapResult(result: any): number | null {
-  if (!result) return null;
-  const val = result.data !== undefined ? result.data : result.value;
-  switch (result.type) {
-    case 'ok': return unwrapResult(result.value);
-    case 'some': return unwrapResult(result.value);
-    case 'uint': case 'int': return Number(BigInt(val));
-    case 'tuple': {
-      // Take the last key (SDK convention)
-      const keys = Object.keys(val ?? {}).sort((a, b) => b.localeCompare(a));
-      return keys.length > 0 ? unwrapResult(val[keys[0]]) : null;
-    }
-    default: return null;
-  }
-}
-
-// ── ABI cache (module-level, shared across calls) ─────────────────────────────
+// ── ABI cache ─────────────────────────────────────────────────────────────────
 const _abiCache = new Map<string, Promise<any>>();
 
 function getCachedAbi(deployer: string, name: string): Promise<any> {
   const key = `${deployer}.${name}`;
   if (!_abiCache.has(key)) {
-    _abiCache.set(key, fetchAbi(deployer, name).catch(e => {
-      _abiCache.delete(key); // allow retry on failure
-      throw e;
-    }));
+    const p = fetch(
+      `${BITFLOW_CONFIG.READONLY_CALL_API_HOST}/v2/contracts/interface/${deployer}/${name}`,
+      { headers: { Accept: 'application/json', 'Content-Type': 'application/json' } },
+    )
+      .then(r => { if (!r.ok) throw new Error(`ABI ${key}: ${r.status}`); return r.json(); })
+      .catch(e => { _abiCache.delete(key); throw e; });
+    _abiCache.set(key, p);
   }
   return _abiCache.get(key)!;
+}
+
+// ── Clarity value builder ─────────────────────────────────────────────────────
+// Converts a JS value to a ClarityValue based on the ABI arg type.
+
+function buildCv(value: any, type: any): ReturnType<typeof Cl.uint> {
+  if (value === null || value === undefined) return Cl.none() as any;
+
+  const t = typeof type === 'string' ? type : (type?.type ?? '');
+
+  if (t === 'uint128') return Cl.uint(BigInt(Math.floor(Number(value)))) as any;
+  if (t === 'int128')  return Cl.int(BigInt(Math.floor(Number(value)))) as any;
+  if (t === 'bool')    return (value ? Cl.bool(true) : Cl.bool(false)) as any;
+
+  if (t === 'principal' || t === 'trait_reference') {
+    const s = String(value);
+    if (s.includes('.')) {
+      const [addr, cname] = s.split('.');
+      return Cl.contractPrincipal(addr, cname) as any;
+    }
+    return Cl.standardPrincipal(s) as any;
+  }
+
+  if (t === 'optional' || type?.optional !== undefined) {
+    if (value === null || value === undefined) return Cl.none() as any;
+    return Cl.some(buildCv(value, type.optional ?? type.value)) as any;
+  }
+
+  if (t === 'tuple' || type?.tuple) {
+    const fields: Array<{ name: string; type: any }> = type.tuple ?? type.fields ?? [];
+    const obj: Record<string, any> = {};
+    for (const f of fields) obj[f.name] = buildCv(value?.[f.name], f.type);
+    return Cl.tuple(obj) as any;
+  }
+
+  if (t === 'list' || type?.list) {
+    const items = Array.isArray(value) ? value : [];
+    return Cl.list(items.map((item: any) => buildCv(item, type.list?.type ?? type.type))) as any;
+  }
+
+  if (t === 'buffer' || type?.buffer) {
+    if (value instanceof Uint8Array) return Cl.buffer(value) as any;
+    if (typeof value === 'string') return Cl.bufferFromHex(value) as any;
+    return Cl.buffer(new Uint8Array()) as any;
+  }
+
+  if (t === 'string-ascii' || type?.['string-ascii']) return Cl.stringAscii(String(value)) as any;
+  if (t === 'string-utf8'  || type?.['string-utf8'])  return Cl.stringUtf8(String(value)) as any;
+
+  // Fallback for numeric bigints
+  if (typeof value === 'bigint' || typeof value === 'number') {
+    return Cl.uint(BigInt(Math.floor(Number(value)))) as any;
+  }
+
+  return Cl.none() as any;
+}
+
+// ── Result unwrapper ──────────────────────────────────────────────────────────
+
+function unwrap(result: any): number | null {
+  if (!result) return null;
+  const val = result.data !== undefined ? result.data : result.value;
+  switch (result.type) {
+    case 'ok':   return unwrap(result.value);
+    case 'some': return unwrap(result.value);
+    case 'uint': case 'int': return Number(BigInt(val));
+    case 'tuple': {
+      const keys = Object.keys(val ?? {}).sort((a, b) => b.localeCompare(a));
+      return keys.length > 0 ? unwrap(val[keys[0]]) : null;
+    }
+    default: return null;
+  }
 }
 
 // ── Public: parallel quote ────────────────────────────────────────────────────
@@ -129,35 +111,35 @@ export async function getParallelQuote(
   amount: number,
 ): Promise<QuoteResult> {
   const sdk = getBitflowSDK();
-
-  // 1. Ensure token list is loaded (needed for decimal lookups)
   const ctx = (sdk as any).context;
+
+  // Ensure token list is loaded (needed for decimal lookups)
   if (ctx.availableTokens.length === 0) {
     await sdk.getAvailableTokens();
   }
 
-  // 2. Get all routes (single API call, cached by SDK)
+  // Get all routes (single API call, cached by SDK after first fetch)
   const routes = await sdk.getAllPossibleTokenYRoutes(tokenX, tokenY);
 
   if (routes.length === 0) {
     return { bestRoute: null, allRoutes: [], inputData: { tokenX, tokenY, amountInput: amount } };
   }
 
-  // 3. Resolve token decimals from the SDK's token list
-  const getDecimals = (tokenId: string): { tokenContract: string; tokenDecimals: number } | null => {
-    const token = ctx.availableTokens.find((t: any) => t.tokenId === tokenId);
-    if (!token?.tokenContract) return null;
-    return { tokenContract: token.tokenContract, tokenDecimals: token.tokenDecimals ?? 6 };
-  };
+  // Resolve token decimals
+  const findToken = (id: string) =>
+    ctx.availableTokens.find((t: any) => t.tokenId === id);
+  const txMeta = findToken(tokenX);
+  const tyMeta = findToken(tokenY);
+  const txDecimals: number = txMeta?.tokenDecimals ?? 6;
+  const tyDecimals: number = tyMeta?.tokenDecimals ?? 6;
+  const amountScaled = BigInt(Math.floor(amount * Math.pow(10, txDecimals)));
 
-  const tokenXMeta = getDecimals(tokenX);
-  const tokenYMeta = getDecimals(tokenY);
+  const providerAddress = BITFLOW_CONFIG.BITFLOW_PROVIDER_ADDRESS;
 
-  // 4. Pre-fetch all unique contract ABIs in parallel
+  // Pre-fetch all unique ABIs in parallel
   const uniqueContracts = new Set<string>();
-  for (const route of routes) {
-    const contract = route.quoteData?.contract;
-    if (contract?.includes('.')) uniqueContracts.add(contract);
+  for (const r of routes) {
+    if (r.quoteData?.contract?.includes('.')) uniqueContracts.add(r.quoteData.contract);
   }
   await Promise.allSettled(
     Array.from(uniqueContracts).map(c => {
@@ -166,46 +148,37 @@ export async function getParallelQuote(
     }),
   );
 
-  // 5. Fire all read-only calls in parallel
-  const providerAddress = (sdk as any).context?.providerAddress
-    ?? 'SP1HTSGV1BXVAAVWJZ3MZJCTH9P28Z52ENQPX6JWV';
-
+  // Fire all read-only calls in parallel
   const results = await Promise.allSettled(
     routes.map(async (route) => {
       const qd = route.quoteData;
-      if (!qd?.contract || !qd?.function || !qd?.parameters) {
-        throw new Error('Route missing quoteData');
-      }
+      if (!qd?.contract || !qd?.function || !qd?.parameters) throw new Error('Missing quoteData');
 
       const [deployer, contractName] = qd.contract.split('.');
       const abi = await getCachedAbi(deployer, contractName);
-      const argDefs = getFunctionArgs(abi, qd.function);
+      const fnDef = abi?.functions?.find((f: any) => f.name === qd.function);
+      if (!fnDef) throw new Error(`Function ${qd.function} not found in ABI`);
 
-      // Build parameters with amount injected
-      const params = { ...qd.parameters };
-      const amountScaled = tokenXMeta
-        ? BigInt(Math.floor(amount * Math.pow(10, tokenXMeta.tokenDecimals)))
-        : BigInt(Math.floor(amount));
-
-      if ('dx' in params && params.dx === null) params.dx = amountScaled;
-      else if ('amount' in params && params.amount === null) params.amount = amountScaled;
-      else if ('amt-in' in params && params['amt-in'] === null) params['amt-in'] = amountScaled;
-      else if ('amt-in-max' in params && params['amt-in-max'] === null) params['amt-in-max'] = amountScaled;
-      else if ('y-amount' in params && params['y-amount'] === null) { params['y-amount'] = amountScaled; params['x-amount'] = amountScaled; }
-      else if ('x-amount' in params && params['x-amount'] === null) params['x-amount'] = amountScaled;
-      else if ('dy' in params && params.dy === null) params.dy = amountScaled;
-      else params.dx = amountScaled;
+      // Build params with amount injected
+      const p: Record<string, any> = { ...qd.parameters };
+      if ('dx' in p && p.dx === null)                   p.dx = amountScaled;
+      else if ('amount' in p && p.amount === null)       p.amount = amountScaled;
+      else if ('amt-in' in p && p['amt-in'] === null)    p['amt-in'] = amountScaled;
+      else if ('amt-in-max' in p && p['amt-in-max'] === null) p['amt-in-max'] = amountScaled;
+      else if ('y-amount' in p && p['y-amount'] === null) { p['y-amount'] = amountScaled; p['x-amount'] = amountScaled; }
+      else if ('x-amount' in p && p['x-amount'] === null) p['x-amount'] = amountScaled;
+      else if ('dy' in p && p.dy === null)               p.dy = amountScaled;
+      else                                               p.dx = amountScaled;
 
       // Inject provider if needed
-      const needsProvider = argDefs.some((a: any) => a.name === 'provider');
-      if (needsProvider && (params.provider === null || params.provider === undefined)) {
-        params.provider = providerAddress;
+      if (fnDef.args.some((a: any) => a.name === 'provider') &&
+          (p.provider === null || p.provider === undefined)) {
+        p.provider = providerAddress;
       }
 
-      // Build Clarity function args
-      const functionArgs = argDefs.map((argDef: any) => convertArg(params[argDef.name], argDef.type));
+      // Build Clarity args
+      const functionArgs = fnDef.args.map((a: any) => buildCv(p[a.name], a.type));
 
-      // Call the read-only function
       const result = await fetchCallReadOnlyFunction({
         contractAddress: deployer,
         contractName,
@@ -215,77 +188,64 @@ export async function getParallelQuote(
         client: {
           baseUrl: BITFLOW_CONFIG.READONLY_CALL_API_HOST,
           fetch: (url: string, init?: RequestInit) => {
-            const headers = new Headers((init as any)?.headers);
-            headers.set('Accept', 'application/json');
-            headers.set('Content-Type', 'application/json');
-            return fetch(url, { ...init, headers });
+            const h = new Headers((init as any)?.headers);
+            h.set('Accept', 'application/json');
+            h.set('Content-Type', 'application/json');
+            return fetch(url, { ...init, headers: h });
           },
         },
         senderAddress: deployer,
       });
 
-      const rawResult = unwrapResult(result);
-      if (rawResult === null || rawResult <= 0) throw new Error('Invalid quote result');
+      const raw = unwrap(result);
+      if (raw === null || raw <= 0) throw new Error('Invalid quote result');
 
-      // Scale output by tokenY decimals
-      const convertedResult = tokenYMeta
-        ? rawResult / Math.pow(10, tokenYMeta.tokenDecimals)
-        : rawResult;
+      const converted = raw / Math.pow(10, tyDecimals);
 
-      // Build the same RouteQuote shape the SDK returns
       const updatedSwapData = {
         ...route.swapData,
         parameters: {
           ...route.swapData?.parameters,
-          amount: params.dx ?? params.amount ?? params['amt-in'] ?? params['y-amount'] ?? params['x-amount'] ?? params.dy,
-          dx: params.dx ?? params.amount ?? params['amt-in'],
-          'amt-in': params['amt-in'] ?? params.dx ?? params.amount,
-          'min-received': rawResult,
-          'min-dy': rawResult,
-          'min-dz': rawResult,
-          'min-dw': rawResult,
-          'amt-out': rawResult,
-          'amt-out-min': rawResult,
-          'min-x-amount': rawResult,
-          'min-y-amount': rawResult,
-          'min-dx': rawResult,
-          provider: params.provider,
+          amount: p.dx ?? p.amount ?? p['amt-in'] ?? p['y-amount'] ?? p['x-amount'] ?? p.dy,
+          dx: p.dx ?? p.amount ?? p['amt-in'],
+          'amt-in': p['amt-in'] ?? p.dx ?? p.amount,
+          'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
+          'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,
+          'min-y-amount': raw, 'min-dx': raw,
+          provider: p.provider,
         },
       };
 
       return {
         route: { ...route, swapData: updatedSwapData },
-        quote: convertedResult,
-        params,
-        quoteData: { ...qd, parameters: params },
+        quote: converted,
+        params: p,
+        quoteData: { ...qd, parameters: p },
         swapData: updatedSwapData,
         dexPath: route.dex_path,
         tokenPath: route.token_path,
-        tokenXDecimals: tokenXMeta?.tokenDecimals ?? 0,
-        tokenYDecimals: tokenYMeta?.tokenDecimals ?? 0,
+        tokenXDecimals: txDecimals,
+        tokenYDecimals: tyDecimals,
       };
     }),
   );
 
-  // 6. Flatten and sort
+  // Flatten, sort, return
   const allRoutes: any[] = (results as PromiseSettledResult<any>[]).flatMap((r, i) => {
     if (r.status === 'fulfilled') return [r.value];
+    console.warn(`[ParallelQuote] Route ${i} failed:`, r.reason?.message);
     return [{
-      route: routes[i],
-      quote: null,
+      route: routes[i], quote: null,
       params: routes[i].quoteData?.parameters ?? {},
-      quoteData: routes[i].quoteData,
-      swapData: routes[i].swapData,
-      dexPath: routes[i].dex_path,
-      tokenPath: routes[i].token_path,
-      tokenXDecimals: tokenXMeta?.tokenDecimals ?? 0,
-      tokenYDecimals: tokenYMeta?.tokenDecimals ?? 0,
-      error: (r as PromiseRejectedResult).reason?.message ?? 'Quote failed',
+      quoteData: routes[i].quoteData, swapData: routes[i].swapData,
+      dexPath: routes[i].dex_path, tokenPath: routes[i].token_path,
+      tokenXDecimals: txDecimals, tokenYDecimals: tyDecimals,
+      error: r.reason?.message ?? 'Quote failed',
     }];
   });
 
   allRoutes.sort((a, b) => (b.quote ?? 0) - (a.quote ?? 0));
-  const bestRoute = allRoutes.find(r => r.quote !== null && r.quote !== undefined && r.quote > 0) ?? null;
+  const bestRoute = allRoutes.find(r => r.quote !== null && r.quote > 0) ?? null;
 
   return { bestRoute, allRoutes, inputData: { tokenX, tokenY, amountInput: amount } };
 }
