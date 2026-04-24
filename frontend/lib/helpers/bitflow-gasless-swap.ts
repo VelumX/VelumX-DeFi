@@ -205,7 +205,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   });
 
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
-  const minAmountOutRaw = Math.floor((bestRoute.quote ?? 0) * 0.99 * Math.pow(10, params.tokenOutDecimals)); // 1% slippage
 
   // Helper: build a contractPrincipalCV from a "ADDR.name" string
   const toContractCV = (principal: string | undefined) => {
@@ -394,9 +393,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const [paymasterAddr, paymasterName] = config.velumxPaymasterAddress.split('.');
     const [feeTokenAddr, feeTokenName] = feeToken.split('.');
-    const [tokenInAddr, tokenInName] = params.tokenIn.split('.');
-    const [tokenOutAddr, tokenOutName] = params.tokenOut.split('.');
-    const [poolContractAddr, poolContractName] = resolvedPool.split('.');
 
     if (isVelarXyk || isVelarSS) {
       // Velar routers use swap-helper-a/b/c/d with tuple trait args.
@@ -430,6 +426,20 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
       console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1 Velar)', { functionName, router: resolvedPool });
     } else {
+      // For stableswap and standard router routes, use getSwapParams to get the
+      // correct SDK-built args, then determine the paymaster function name and
+      // append the 3 fee args. This is always correct regardless of pool ID or
+      // route shape — avoids the manual poolId/amountIn/minOut calculation bugs.
+      const patchedRoute = {
+        ...((bestRoute as any).route || bestRoute),
+        swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
+      };
+      const swapParams = await bitflow.getSwapParams(
+        { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
+        userAddress,
+        0.01
+      );
+
       let functionName: string;
       if (isStableswap && isReverse) {
         functionName = 'swap-bitflow-stableswap-reverse';
@@ -439,20 +449,22 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         functionName = 'swap-bitflow-router';
       }
 
+      // SDK args cover: pool/router, id, token-x, token-y, amount-in, min-amount-out
+      // Paymaster appends: fee-amount, relayer, fee-token
       const functionArgs = [
-        contractPrincipalCV(poolContractAddr, poolContractName),  // pool / router
-        uintCV(poolId),                                            // id
-        contractPrincipalCV(tokenInAddr, tokenInName),             // token-x
-        contractPrincipalCV(tokenOutAddr, tokenOutName),           // token-y
-        uintCV(amountInRaw),                                       // amount-in
-        uintCV(minAmountOutRaw),                                   // min-amount-out
-        uintCV(BigInt(feeAmount)),                                 // fee-amount
-        principalCV(relayerAddress!),                              // relayer
-        contractPrincipalCV(feeTokenAddr, feeTokenName),           // fee-token
+        ...swapParams.functionArgs,
+        uintCV(BigInt(feeAmount)),
+        principalCV(relayerAddress!),
+        contractPrincipalCV(feeTokenAddr, feeTokenName),
       ];
 
       txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
-      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', { functionName, pool: resolvedPool });
+      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', {
+        functionName,
+        pool: resolvedPool,
+        sdkArgsCount: swapParams.functionArgs.length,
+        totalArgsCount: functionArgs.length,
+      });
     }
   }
 
