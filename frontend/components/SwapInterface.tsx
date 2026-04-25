@@ -237,6 +237,11 @@ export function SwapInterface() {
     try {
       const bitflow = getBitflowSDK();
       
+      // Ensure tokens are loaded for decimal resolution
+      if (!(bitflow as any).context?.availableTokens?.length) {
+        await bitflow.getAvailableTokens();
+      }
+      
       // Helper to find tokenId from the discovered tokens list if missing
       const getTokenId = (token: Token) => {
         if (token.tokenId) return token.tokenId;

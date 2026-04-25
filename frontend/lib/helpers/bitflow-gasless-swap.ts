@@ -46,6 +46,12 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // Use the pre-fetched quote from the UI if available (avoids a redundant
   // serial getQuoteForRoute call that can take 2+ minutes for some pairs).
   onProgress?.('Fetching quote from Bitflow...');
+  
+  // Ensure tokens are loaded for decimal resolution
+  if (!(bitflow as any).context?.availableTokens?.length) {
+    await bitflow.getAvailableTokens();
+  }
+
   const quoteResult: QuoteResult = params.quoteResult
     ?? await bitflow.getQuoteForRoute(tokenInId, tokenOutId, Number(amountIn));
 
