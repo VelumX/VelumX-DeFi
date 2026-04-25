@@ -468,15 +468,16 @@ export function SwapInterface() {
           tokenYDecimals: state.outputToken.decimals,
         }, stacksAddress, state.slippage / 100);
 
-        const { getStacksConnect } = await import('@/lib/stacks-loader');
+        const { getStacksConnect, getNetworkInstance } = await import('@/lib/stacks-loader');
         const connect = await getStacksConnect();
+        const network = await getNetworkInstance(true);
 
         await connect.openContractCall({
           contractAddress: swapParams.contractAddress,
           contractName: swapParams.contractName,
           functionName: swapParams.functionName,
           functionArgs: swapParams.functionArgs,
-          network: 'mainnet',
+          network: network,
           anchorMode: 'any',
           postConditionMode: 'allow',
           postConditions: [],

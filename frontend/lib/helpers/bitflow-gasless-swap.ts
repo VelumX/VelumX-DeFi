@@ -50,7 +50,9 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     // A. Estimate Fee (only if not provided by UI)
     params.feeEstimate ? Promise.resolve(params.feeEstimate) : velumx.estimateFee({ feeToken, estimatedGas: 250000 }),
     // B. Load Stacks Connect (dynamic import)
-    import('../stacks-loader').then(m => m.getStacksConnect())
+    import('../stacks-loader').then(m => m.getStacksConnect()),
+    // C. Load Stacks Network (to avoid 'mainnet' string errors in connect)
+    import('../stacks-loader').then(m => m.getNetworkInstance(true))
   ]);
 
   // Ensure tokens are loaded for decimal resolution
@@ -241,7 +243,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   // 3. Await parallel setup results
   onProgress?.('Estimating gasless fee...');
-  const [estimate, connect] = await setupPromise;
+  const [estimate, connect, network] = await setupPromise;
   const feeAmount = estimate.maxFee;
   
   // Use relayer address from estimate, or fallback to config
@@ -753,7 +755,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         functionName: txOptions.functionName,
         functionArgs: txOptions.functionArgs,
         sponsored: true,
-        network: 'mainnet',
+        network: network,
         anchorMode: 'any',
         postConditionMode: PostConditionMode.Allow,
         postConditions: [],
