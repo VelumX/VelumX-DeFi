@@ -34,7 +34,7 @@ const MAX_ROUTES = 5;
 const QUOTE_TIMEOUT_MS = 1500;
 
 // Hard deadline for route discovery (the slow Bitflow API call).
-const ROUTE_DISCOVERY_TIMEOUT_MS = 8000;
+const ROUTE_DISCOVERY_TIMEOUT_MS = 20000;
 
 // In-memory route cache TTL.
 const ROUTES_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
@@ -104,15 +104,20 @@ async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
   }
 
   // Fallback: use the Next.js rewrite proxy
-  const controller2 = new AbortController();
-  const timer2 = setTimeout(() => controller2.abort(), ROUTE_DISCOVERY_TIMEOUT_MS);
-  const res = await fetch(`/api/bitflow/getAllRoutes?${params}`, {
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    signal: controller2.signal,
-  });
-  clearTimeout(timer2);
-  if (!res.ok) throw new Error(`Route discovery failed: ${res.status}`);
-  return res.json();
+  try {
+    const controller2 = new AbortController();
+    const timer2 = setTimeout(() => controller2.abort(), ROUTE_DISCOVERY_TIMEOUT_MS);
+    const res = await fetch(`/api/bitflow/getAllRoutes?${params}`, {
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      signal: controller2.signal,
+    });
+    clearTimeout(timer2);
+    if (!res.ok) throw new Error(`Route discovery failed: ${res.status}`);
+    return await res.json();
+  } catch (e: any) {
+    console.warn('[ParallelQuote] Proxy API failed:', e.name === 'AbortError' ? 'timeout' : e.message);
+    return {}; // Graceful degradation to empty routes instead of throwing
+  }
 }
 
 async function getCachedRoutes(tokenX: string, tokenY: string): Promise<any[]> {
