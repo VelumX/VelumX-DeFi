@@ -477,6 +477,18 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         [] as string[]
       ).map(normalizeTokenPathEntry);
 
+      // Remove consecutive duplicates immediately — the Bitflow API often returns
+      // paths like [welsh, aeusdc, aeusdc, usdcx] where the same token is both
+      // the output of one pool and the input of the next. The Velar router
+      // expects deduplicated paths (e.g. [welsh, aeusdc, usdcx] for swap-helper-b).
+      if (tokenPath.length > 0) {
+        const before = tokenPath.length;
+        tokenPath = tokenPath.filter((t, i) => i === 0 || t !== tokenPath[i - 1]);
+        if (tokenPath.length !== before) {
+          console.log(`[Velar] Deduped token-path: ${before} → ${tokenPath.length}`, tokenPath);
+        }
+      }
+
       // Last resort: derive token path from postConditions + SDK token list.
       // Also trigger this path if the token-path was populated but still contains
       // unresolved token IDs (no dot in any entry after normalization).
@@ -601,6 +613,17 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       const hopSuffix = swapData.function.replace('swap-helper-', ''); // 'a','b','c','d'
       const prefix = isVelarXyk ? 'swap-velar-xyk-router' : 'swap-velar-stableswap-router';
       const functionName = `${prefix}-${hopSuffix}`;
+
+      // Validate token path length matches hop count.
+      // swap-helper-a = 1 hop = 2 tokens, -b = 2 hops = 3 tokens, etc.
+      const EXPECTED_TOKENS: Record<string, number> = { a: 2, b: 3, c: 4, d: 5 };
+      const expectedLen = EXPECTED_TOKENS[hopSuffix];
+      if (expectedLen && tokenPath.length > expectedLen) {
+        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Truncating.`);
+        tokenPath = tokenPath.slice(0, expectedLen);
+      } else if (expectedLen && tokenPath.length < expectedLen) {
+        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Path may be incomplete.`);
+      }
 
       // Velar share-fee-to contract (always the same)
       const VELAR_SHARE_FEE_TO = 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.univ2-share-fee-to';
