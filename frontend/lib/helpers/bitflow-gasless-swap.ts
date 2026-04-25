@@ -16,7 +16,7 @@ import { getConfig } from '../config';
 import { QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '../bitflow';
 import { getParallelQuote } from './bitflow-parallel-quote';
-import { request } from '@stacks/connect';
+import { bytesToHex } from '../utils/address-encoding';
 
 const bitflow = getBitflowSDK();
 
@@ -234,28 +234,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   
   // Use relayer address from estimate, or fallback to config
   const relayerAddress = estimate.relayerAddress || config.velumxRelayerAddress;
-
-  // Get public key
-  let publicKey = userPublicKey || '';
-  if (!publicKey) {
-    try {
-      const addrResult = await request('stx_getAddresses') as any;
-      const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === userAddress)
-        || (addrResult?.addresses || [])[0];
-      publicKey = stxEntry?.publicKey || '';
-    } catch (e) { console.warn('stx_getAddresses failed:', e); }
-  }
-  if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
-
-  // Fetch nonce
-  let nonce = 0n;
-  try {
-    const nonceRes = await fetch(`https://api.mainnet.hiro.so/v2/accounts/${userAddress}?proof=0`);
-    if (nonceRes.ok) {
-      const accountData = await nonceRes.json();
-      nonce = BigInt(accountData.nonce ?? 0);
-    }
-  } catch (e) { console.warn('Failed to fetch nonce:', e); }
 
   // 3. Build VelumX Contract Call based on Policy
   onProgress?.('Preparing VelumX transaction...');
@@ -748,50 +726,58 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     }
   }
 
-  // 5. Build unsigned sponsored tx, then request wallet signature (no broadcast)
+  // 5. Request wallet signature via openContractCall (UI-based, more robust)
   onProgress?.('Waiting for wallet signature...');
 
-  const unsignedTx = await buildSponsoredContractCall({
-    contractAddress: txOptions.contractAddress,
-    contractName: txOptions.contractName,
-    functionName: txOptions.functionName,
-    functionArgs: txOptions.functionArgs,
-    publicKey,
-    nonce,
-    network: 'mainnet',
-  });
+  return new Promise(async (resolve, reject) => {
+    try {
+      const { getStacksConnect } = await import('../stacks-loader');
+      const connect = await getStacksConnect();
 
-  console.log('[Bitflow] Built sponsored tx, length:', (unsignedTx as any).length ?? (unsignedTx as string).length);
+      if (!connect) {
+        throw new Error('Stacks Connect not available');
+      }
 
-  // stx_signTransaction expects a hex string — convert Uint8Array if needed
-  const txForSigning = unsignedTx instanceof Uint8Array
-    ? Buffer.from(unsignedTx).toString('hex')
-    : unsignedTx as string;
+      await connect.openContractCall({
+        contractAddress: txOptions.contractAddress,
+        contractName: txOptions.contractName,
+        functionName: txOptions.functionName,
+        functionArgs: txOptions.functionArgs,
+        sponsored: true,
+        network: 'mainnet',
+        anchorMode: 'any',
+        postConditionMode: PostConditionMode.Allow,
+        postConditions: [],
+        onFinish: async (data: any) => {
+          try {
+            const signedTxHex = data.txHex;
+            if (!signedTxHex) {
+              throw new Error('Wallet did not return signed transaction');
+            }
 
-  let signedTxHex: string;
-  try {
-    const signResult = await request('stx_signTransaction', {
-      transaction: txForSigning,
-      broadcast: false,
-    });
-    signedTxHex = (signResult as any).transaction ?? (signResult as any).txHex;
-    if (!signedTxHex) throw new Error('Wallet did not return signed tx hex');
-  } catch (err: any) {
-    if (err?.message?.toLowerCase().includes('cancel') || err?.code === 4001) {
-      throw new Error('Swap cancelled by user');
+            // 6. Relayer co-signs + broadcasts
+            onProgress?.('Broadcasting via VelumX...');
+            const result = await velumx.sponsor(signedTxHex, {
+              feeToken: isDeveloperSponsoring ? undefined : feeToken,
+              feeAmount: isDeveloperSponsoring ? '0' : feeAmount,
+              network: 'mainnet'
+            });
+
+            console.log('VelumX Bitflow sponsor result:', result);
+            resolve(result.txid);
+          } catch (err: any) {
+            console.error('Relayer error:', err);
+            reject(err);
+          }
+        },
+        onCancel: () => {
+          reject(new Error('Swap cancelled by user'));
+        }
+      });
+    } catch (err: any) {
+      console.error('Wallet connection error:', err);
+      reject(err);
     }
-    throw err;
-  }
-
-  // 6. Relayer co-signs + broadcasts
-  onProgress?.('Broadcasting via VelumX...');
-  const result = await velumx.sponsor(signedTxHex, {
-    feeToken: isDeveloperSponsoring ? undefined : feeToken,
-    feeAmount: isDeveloperSponsoring ? '0' : feeAmount,
-    network: 'mainnet'
   });
-
-  console.log('VelumX Bitflow sponsor result:', result);
-  return result.txid;
 }
 
