@@ -425,18 +425,46 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       //   5. Derive from postConditions token contracts + known tokenIn/tokenOut principals
       const quoteParams = (bestRoute as any).quoteData?.parameters || {};
 
-      // Build a quick token-ID → principal map from the params we already have.
-      // Used to normalize token-path entries that are Bitflow IDs (e.g. "token-welsh")
-      // rather than contract principals before any further processing.
-      const earlyTokenIdMap: Record<string, string> = {};
+      // ── Comprehensive token-ID → contract principal map ─────────────────────
+      // Covers tokenIn/tokenOut from params, well-known tokens, AND all tokens
+      // from the SDK's availableTokens list. This ensures intermediate tokens
+      // in multi-hop paths (e.g. "token-aeusdc") resolve to principals.
+      const WELL_KNOWN_TOKENS: Record<string, string> = {
+        'token-stx':    'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx',
+        'token-wstx':   'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx',
+        'STX':          'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx',
+        'token-aeusdc': 'SP3Y2ZSH8P7D50B0VBTSX11S7XSG24M1VB9YFQA4K.token-aeusdc',
+        'token-alex':   'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex',
+        'token-welsh':  'SP3NE50GEXFG9SZGTT51P40X2CKYSZ5CC4ZTZ7A2G.welshcorgicoin-token',
+        'token-usda':   'SP2C2YFP12AJZB1KD5M1DMR69R7H5PCSV927WKDE.arkadiko-token',
+        'token-susdt':  'SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt',
+        'token-sbtc':   'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token',
+        'token-usdcx':  'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx',
+      };
+
+      const earlyTokenIdMap: Record<string, string> = { ...WELL_KNOWN_TOKENS };
       if (params.tokenInId && params.tokenIn?.includes('.'))   earlyTokenIdMap[params.tokenInId]  = params.tokenIn;
       if (params.tokenOutId && params.tokenOut?.includes('.')) earlyTokenIdMap[params.tokenOutId] = params.tokenOut;
       if (params.tokenIn?.includes('.'))  earlyTokenIdMap[params.tokenIn]  = params.tokenIn;
       if (params.tokenOut?.includes('.')) earlyTokenIdMap[params.tokenOut] = params.tokenOut;
+      // Handle STX special cases: address may be 'STX', 'null', or empty
+      const isStxIn  = params.tokenInId === 'token-stx'  || params.tokenIn === 'STX';
+      const isStxOut = params.tokenOutId === 'token-stx' || params.tokenOut === 'STX' || params.tokenOut === 'null' || !params.tokenOut;
+      if (isStxIn)  earlyTokenIdMap[params.tokenInId]  = WELL_KNOWN_TOKENS['token-stx'];
+      if (isStxOut) earlyTokenIdMap[params.tokenOutId] = WELL_KNOWN_TOKENS['token-stx'];
+
+      // Populate from SDK's available tokens (covers all intermediates)
+      const sdkCtxEarly = (bitflow as any).context;
+      if (sdkCtxEarly?.availableTokens?.length > 0) {
+        for (const tok of sdkCtxEarly.availableTokens) {
+          if (tok.tokenId && tok.tokenContract?.includes('.')) {
+            earlyTokenIdMap[tok.tokenId] = tok.tokenContract;
+          }
+        }
+      }
 
       // Normalize a token path entry: if it's a Bitflow token ID (no dot), resolve
-      // it to a contract principal using the map above. Entries already containing
-      // a dot are returned unchanged.
+      // it to a contract principal using the comprehensive map above.
       const normalizeTokenPathEntry = (entry: string): string =>
         entry.includes('.') ? entry : (earlyTokenIdMap[entry] || entry);
 
@@ -450,14 +478,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       ).map(normalizeTokenPathEntry);
 
       // Last resort: derive token path from postConditions + SDK token list.
-      // params.tokenIn/tokenOut may be Bitflow token IDs (e.g. "token-welsh"), not principals.
-      // Look up the actual contract principals from the SDK's token list.
       // Also trigger this path if the token-path was populated but still contains
       // unresolved token IDs (no dot in any entry after normalization).
       const tokenPathHasUnresolved = tokenPath.length > 0 && tokenPath.some(e => !e.includes('.'));
       if (tokenPath.length === 0 || tokenPathHasUnresolved) {
-        // Debug: log everything we have to understand what the API returned
-        console.warn('[Velar] token-path empty, attempting derivation. Available data:', {
+        console.warn('[Velar] token-path empty/unresolved, attempting derivation. Available data:', {
           tokenInId: params.tokenInId,
           tokenIn: params.tokenIn,
           tokenOutId: params.tokenOutId,
@@ -473,16 +498,22 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         if (!sdkCtx?.availableTokens?.length) {
           try { await bitflow.getAvailableTokens(); } catch (_) {}
         }
+        // Re-populate earlyTokenIdMap with freshly-loaded SDK tokens
+        if (sdkCtx?.availableTokens?.length > 0) {
+          for (const tok of sdkCtx.availableTokens) {
+            if (tok.tokenId && tok.tokenContract?.includes('.')) {
+              earlyTokenIdMap[tok.tokenId] = tok.tokenContract;
+            }
+          }
+        }
 
         const findContract = (tokenId: string, tokenAddress: string): string => {
-          // First check our pre-built map (params.tokenIn/tokenOut are already principals)
+          // Check comprehensive map first (covers well-known + SDK + params)
           if (earlyTokenIdMap[tokenId]?.includes('.')) return earlyTokenIdMap[tokenId];
           if (earlyTokenIdMap[tokenAddress]?.includes('.')) return earlyTokenIdMap[tokenAddress];
-          if (sdkCtx?.availableTokens?.length > 0) {
-            const t = sdkCtx.availableTokens.find(
-              (tok: any) => tok.tokenId === tokenId || tok.tokenContract === tokenAddress
-            );
-            if (t?.tokenContract?.includes('.')) return t.tokenContract;
+          // STX special cases
+          if (tokenId === 'token-stx' || tokenAddress === 'STX' || tokenAddress === 'null' || !tokenAddress) {
+            return WELL_KNOWN_TOKENS['token-stx'];
           }
           if (tokenAddress?.includes('.')) return tokenAddress;
           return '';
@@ -510,14 +541,17 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           .filter((c): c is string => !!c && c.includes('.'))
           .map(resolveForCompare);
 
-        const intermediates = pcContracts.filter(
-          c => c !== resolvedTokenIn && c !== resolvedTokenOut
-        );
+        // Deduplicate intermediates — postConditions can list the same token twice
+        const intermediates = [...new Set(
+          pcContracts.filter(c => c !== resolvedTokenIn && c !== resolvedTokenOut)
+        )];
 
         console.warn('[Velar] Derivation result:', { tokenInContract, tokenOutContract, resolvedTokenIn, resolvedTokenOut, pcContracts, intermediates });
 
         if (resolvedTokenIn && resolvedTokenOut) {
           tokenPath = [resolvedTokenIn, ...intermediates, resolvedTokenOut];
+          // Final dedup: remove consecutive duplicates (e.g. [A, B, B, C] → [A, B, C])
+          tokenPath = tokenPath.filter((t, i) => i === 0 || t !== tokenPath[i - 1]);
           console.log('[Velar] Derived token-path:', tokenPath);
         }
       }
@@ -536,15 +570,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ? rawProvider
         : null;
 
-      // Build a lookup map from Bitflow token ID → contract principal using the
-      // params we already have. This handles cases where the Bitflow API returns
-      // token IDs (e.g. "token-welsh") in the token-path instead of principals.
-      const tokenIdToContract: Record<string, string> = {};
-      if (params.tokenInId && params.tokenIn?.includes('.'))  tokenIdToContract[params.tokenInId]  = params.tokenIn;
-      if (params.tokenOutId && params.tokenOut?.includes('.')) tokenIdToContract[params.tokenOutId] = params.tokenOut;
-      // Also index by the address itself for identity lookups
-      if (params.tokenIn?.includes('.'))  tokenIdToContract[params.tokenIn]  = params.tokenIn;
-      if (params.tokenOut?.includes('.')) tokenIdToContract[params.tokenOut] = params.tokenOut;
+      // Reuse the comprehensive earlyTokenIdMap (which includes well-known tokens,
+      // SDK availableTokens, and params) instead of a minimal map. This ensures
+      // intermediates like 'token-aeusdc' resolve correctly in toCV().
+      const tokenIdToContract: Record<string, string> = { ...earlyTokenIdMap };
 
       // Resolve each token/pool principal to mainnet.
       // If the entry is a Bitflow token ID (no '.'), look it up in our map first.
