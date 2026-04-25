@@ -82,7 +82,7 @@ function lsSetRoutes(tokenX: string, data: any): void {
 // ── Route discovery (direct API call with proxy fallback) ─────────────────────
 
 async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
-  const params = new URLSearchParams({ tokenX, depth: '4' });
+  const params = new URLSearchParams({ tokenX, depth: '3' });
 
   // Try direct call first (no proxy hop)
   try {
