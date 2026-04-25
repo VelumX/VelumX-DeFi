@@ -35,6 +35,10 @@ export interface BitflowGaslessSwapParams {
   quoteResult?: QuoteResult;
   /** Pre-fetched fee estimate from the UI — skips the network call if provided */
   feeEstimate?: any;
+  /** Pre-loaded Stacks Connect module — avoids async import delay at popup time */
+  preloadedConnect?: any;
+  /** Pre-loaded Stacks Network instance — avoids async construction at popup time */
+  preloadedNetwork?: any;
   onProgress?: (status: string) => void;
 }
 
@@ -45,14 +49,19 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const config = getConfig();
 
   // 1. Start Parallel Setup (Minimize latency between click and popup)
+  //    Connect & Network should be pre-loaded by the UI to preserve the user gesture.
   onProgress?.('Initializing...');
   const setupPromise = Promise.all([
     // A. Estimate Fee (only if not provided by UI)
     params.feeEstimate ? Promise.resolve(params.feeEstimate) : velumx.estimateFee({ feeToken, estimatedGas: 250000 }),
-    // B. Load Stacks Connect (dynamic import)
-    import('../stacks-loader').then(m => m.getStacksConnect()),
-    // C. Load Stacks Network (to avoid 'mainnet' string errors in connect)
-    import('../stacks-loader').then(m => m.getNetworkInstance(true))
+    // B. Use pre-loaded Connect, or fallback to dynamic import
+    params.preloadedConnect
+      ? Promise.resolve(params.preloadedConnect)
+      : import('../stacks-loader').then(m => m.getStacksConnect()),
+    // C. Use pre-loaded Network, or fallback to dynamic import
+    params.preloadedNetwork
+      ? Promise.resolve(params.preloadedNetwork)
+      : import('../stacks-loader').then(m => m.getNetworkInstance(true))
   ]);
 
   // Ensure tokens are loaded for decimal resolution

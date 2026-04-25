@@ -5,12 +5,11 @@
 
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet } from '@/lib/hooks/useWallet';
 import { useConfig, getConfig } from '@/lib/config';
 import { ArrowDownUp, Settings, Info, Loader2, AlertTriangle, Wallet, ChevronDown, Zap } from 'lucide-react';
 import { formatUnits, parseUnits } from 'viem';
-import { getStacksTransactions, getStacksNetwork, getStacksCommon, getStacksConnect, getNetworkInstance } from '@/lib/stacks-loader';
 import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
 import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
@@ -20,6 +19,11 @@ import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
 import { TransactionStatus } from './ui/TransactionStatus';
+
+/** Timeout for quote API calls (ms) */
+const QUOTE_TIMEOUT_MS = 20_000;
+/** Debounce delay before firing a quote request (ms) */
+const QUOTE_DEBOUNCE_MS = 600;
 
 interface Token {
   symbol: string;
@@ -231,18 +235,37 @@ export function SwapInterface() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokens]);
-  const fetchQuote = async () => {
+
+  // ── Quote request cancellation & staleness tracking ───────────────────────
+  const quoteAbortRef = useRef<AbortController | null>(null);
+  const quoteGenRef = useRef(0);
+
+  /**
+   * Fetch a swap quote from Bitflow with:
+   *   • AbortController — cancels the in-flight network request if the user
+   *     changes inputs before it resolves
+   *   • 20-second timeout — prevents the UI from hanging on slow / dead APIs
+   *   • Generation counter — discards stale responses that arrive after a
+   *     newer request has already been fired
+   *   • Single retry — automatically retries once on transient failures
+   */
+  const fetchQuote = useCallback(async (retryCount = 0) => {
     if (!state.inputToken || !state.outputToken || !state.inputAmount) return;
+
+    // Cancel any in-flight request before starting a new one
+    if (quoteAbortRef.current) {
+      quoteAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    quoteAbortRef.current = controller;
+
+    // Bump generation so stale responses are ignored
+    const generation = ++quoteGenRef.current;
 
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
 
     try {
       const bitflow = getBitflowSDK();
-      
-      // Ensure tokens are loaded for decimal resolution
-      if (!(bitflow as any).context?.availableTokens?.length) {
-        await bitflow.getAvailableTokens();
-      }
       
       // Helper to find tokenId from the discovered tokens list if missing
       const getTokenId = (token: Token) => {
@@ -256,9 +279,30 @@ export function SwapInterface() {
       const tokenOutId = getTokenId(state.outputToken);
       const amountIn = parseFloat(state.inputAmount);
 
-      console.log(`[Swap] Requesting Quote: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
+      console.log(`[Swap] Requesting Quote (gen ${generation}): ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
-      const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      // Race the SDK call against a timeout
+      const quotePromise = bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const id = setTimeout(() => {
+          controller.abort();
+          reject(new Error('Quote request timed out'));
+        }, QUOTE_TIMEOUT_MS);
+        // Clean up the timer if the controller is aborted externally
+        controller.signal.addEventListener('abort', () => clearTimeout(id));
+      });
+
+      const quoteResult: QuoteResult = await Promise.race([quotePromise, timeoutPromise]);
+
+      // If a newer request was fired while we were waiting, discard this result
+      if (generation !== quoteGenRef.current) {
+        console.log(`[Swap] Discarding stale quote (gen ${generation}, current ${quoteGenRef.current})`);
+        return;
+      }
+
+      // If this request was aborted, bail silently
+      if (controller.signal.aborted) return;
+
       console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
         hasBestRoute: !!quoteResult?.bestRoute,
         allRoutesCount: quoteResult?.allRoutes?.length,
@@ -272,7 +316,7 @@ export function SwapInterface() {
         throw new Error(`No liquidity found for ${state.inputToken.symbol} to ${state.outputToken.symbol} on Bitflow`);
       }
 
-      console.log(`[Swap] Success: ${bestRoute.quote} units`);
+      console.log(`[Swap] Success (gen ${generation}): ${bestRoute.quote} units`);
 
       const outputAmountFormatted = bestRoute.quote.toFixed(6);
       const rate = (bestRoute.quote / amountIn).toFixed(6);
@@ -290,15 +334,33 @@ export function SwapInterface() {
         },
         isFetchingQuote: false,
       }));
-    } catch (error) {
+    } catch (error: any) {
+      // Silently ignore aborted requests (user changed input)
+      if (error?.name === 'AbortError' || controller.signal.aborted) {
+        console.log(`[Swap] Quote request aborted (gen ${generation})`);
+        return;
+      }
+
+      // Ignore stale errors
+      if (generation !== quoteGenRef.current) return;
+
+      // Retry once on transient failures (timeout, network blip)
+      if (retryCount < 1) {
+        console.warn(`[Swap] Quote failed (gen ${generation}), retrying...`, error?.message);
+        return fetchQuote(retryCount + 1);
+      }
+
       console.error('Failed to fetch quote via Bitflow SDK:', error);
       setState(prev => ({
         ...prev,
-        error: 'No liquidity pool found for this pair on Bitflow.',
+        error: error?.message?.includes('timed out')
+          ? 'Quote request timed out. Please try again.'
+          : 'No liquidity pool found for this pair on Bitflow.',
         isFetchingQuote: false,
       }));
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.inputToken, state.outputToken, state.inputAmount, tokens]);
 
   // Fetch fee estimate for universal gas mode
   const fetchFeeEstimate = useCallback(async () => {
@@ -327,14 +389,22 @@ export function SwapInterface() {
     if (state.inputToken && state.outputToken && state.inputAmount && parseFloat(state.inputAmount) > 0) {
       const timer = setTimeout(() => {
         fetchQuote();
-      }, 300);
-      return () => clearTimeout(timer);
+      }, QUOTE_DEBOUNCE_MS);
+      return () => {
+        clearTimeout(timer);
+      };
     } else {
       setState(prev => ({ ...prev, outputAmount: '', quote: null }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.inputToken, state.outputToken, state.inputAmount]);
 
+  // Cancel in-flight quote when component unmounts
+  useEffect(() => {
+    return () => {
+      if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    };
+  }, []);
 
   // Separate effect for fee estimate — doesn't block or delay quotes
   useEffect(() => {
@@ -344,8 +414,34 @@ export function SwapInterface() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.gaslessMode, state.selectedGasToken]);
 
+  // ── Eagerly pre-load Stacks Connect & Network ──────────────────────────────
+  // These are needed by the wallet signing popup. Loading them before the user
+  // clicks "Swap" ensures openContractCall fires within the browser's
+  // user-gesture timeout window (~1s), preventing popup-block issues.
+  const connectRef = useRef<any>(null);
+  const networkRef = useRef<any>(null);
 
-
+  useEffect(() => {
+    if (!stacksConnected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getStacksConnect, getNetworkInstance } = await import('@/lib/stacks-loader');
+        const [c, n] = await Promise.all([
+          getStacksConnect(),
+          getNetworkInstance(true),
+        ]);
+        if (!cancelled) {
+          connectRef.current = c;
+          networkRef.current = n;
+          console.log('[Swap] Stacks Connect & Network pre-loaded');
+        }
+      } catch (e) {
+        console.warn('[Swap] Failed to pre-load Stacks modules:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [stacksConnected]);
 
   const switchTokens = () => {
     setState(prev => ({
@@ -417,6 +513,8 @@ export function SwapInterface() {
             inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
           } : undefined,
           feeEstimate: state.feeEstimate,
+          preloadedConnect: connectRef.current,
+          preloadedNetwork: networkRef.current,
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }
@@ -468,9 +566,14 @@ export function SwapInterface() {
           tokenYDecimals: state.outputToken.decimals,
         }, stacksAddress, state.slippage / 100);
 
-        const { getStacksConnect, getNetworkInstance } = await import('@/lib/stacks-loader');
-        const connect = await getStacksConnect();
-        const network = await getNetworkInstance(true);
+        // Use pre-loaded connect/network, fallback to dynamic import if needed
+        let connect = connectRef.current;
+        let network = networkRef.current;
+        if (!connect || !network) {
+          const loader = await import('@/lib/stacks-loader');
+          connect = connect || await loader.getStacksConnect();
+          network = network || await loader.getNetworkInstance(true);
+        }
 
         await connect.openContractCall({
           contractAddress: swapParams.contractAddress,
