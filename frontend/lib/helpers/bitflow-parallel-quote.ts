@@ -42,7 +42,7 @@ const ROUTES_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 // localStorage route cache TTL (survives page reloads).
 const LS_ROUTES_TTL_MS = 5 * 60_000; // 5 minutes
 
-const LS_ROUTES_KEY = 'velumx_routes_v2';
+const LS_ROUTES_KEY = 'velumx_routes_v4';
 
 // ── In-memory route cache ─────────────────────────────────────────────────────
 // The Bitflow getAllRoutes API returns a Record<tokenY, SelectedSwapRoute[]>.
@@ -82,7 +82,7 @@ function lsSetRoutes(tokenX: string, data: any): void {
 // ── Route discovery (direct API call with proxy fallback) ─────────────────────
 
 async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
-  const params = new URLSearchParams({ tokenX, depth: '3' });
+  const params = new URLSearchParams({ tokenX, depth: '2' });
 
   // Try direct call first (no proxy hop)
   try {
@@ -99,8 +99,12 @@ async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
       return data;
     }
   } catch (e: any) {
-    // CORS blocked or timeout — fall through to proxy
-    console.warn('[ParallelQuote] Direct API failed, trying proxy:', e.name === 'AbortError' ? 'timeout' : e.message);
+    if (e.name === 'AbortError') {
+      console.warn('[ParallelQuote] Direct API timed out, skipping proxy fallback.');
+      throw e; // Don't try proxy if it's a timeout (backend is slow)
+    }
+    // CORS blocked — fall through to proxy
+    console.warn('[ParallelQuote] Direct API failed, trying proxy:', e.message);
   }
 
   // Fallback: use the Next.js rewrite proxy
