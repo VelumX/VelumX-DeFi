@@ -664,7 +664,12 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         toCV(tokenPath[0]),
         toCV(tokenPath[1] ?? tokenPath[0]),
         // ss/xyk pool-a
-        toCV(poolPath[0] || resolvedPool),
+        // If poolPath is empty (pure Velar route), we MUST provide a valid pool contract
+        // that satisfies the paymaster's trait requirement, even if it goes unused.
+        // The router contract does NOT implement the pool trait, so passing resolvedPool throws BadFunctionArgument.
+        toCV(poolPath[0] || (isVelarXyk 
+          ? 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.xyk-pool-stx-aeusdc-v-1-1'
+          : 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.stableswap-stx-ststx-v-1-2')),
         // velar tokens (all tokens in path)
         ...tokenPath.map(toCV),
         // velar-share-fee-to
