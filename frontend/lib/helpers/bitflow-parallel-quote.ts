@@ -34,7 +34,7 @@ const MAX_ROUTES = 5;
 const QUOTE_TIMEOUT_MS = 1500;
 
 // Hard deadline for route discovery (the slow Bitflow API call).
-const ROUTE_DISCOVERY_TIMEOUT_MS = 60000;
+const ROUTE_DISCOVERY_TIMEOUT_MS = 90000; // 90s timeout for heavy tokens like WELSH
 
 // In-memory route cache TTL.
 const ROUTES_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
@@ -82,7 +82,7 @@ function lsSetRoutes(tokenX: string, data: any): void {
 // ── Route discovery (direct API call with proxy fallback) ─────────────────────
 
 async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
-  const params = new URLSearchParams({ tokenX, depth: '2' });
+  const params = new URLSearchParams({ tokenX, depth: '2', maxRoutes: '3' });
 
   // Try direct call first (no proxy hop)
   try {

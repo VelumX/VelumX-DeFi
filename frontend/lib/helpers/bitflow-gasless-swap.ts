@@ -439,7 +439,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         'token-usda':   'SP2C2YFP12AJZB1KD5M1DMR69R7H5PCSV927WKDE.arkadiko-token',
         'token-susdt':  'SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt',
         'token-sbtc':   'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token',
-        'token-usdcx':  'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx',
+        'token-usdcx':      'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx',
+        'token-USDCx-auto': 'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx',
       };
 
       const earlyTokenIdMap: Record<string, string> = { ...WELL_KNOWN_TOKENS };
@@ -459,6 +460,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         for (const tok of sdkCtxEarly.availableTokens) {
           if (tok.tokenId && tok.tokenContract?.includes('.')) {
             earlyTokenIdMap[tok.tokenId] = tok.tokenContract;
+            earlyTokenIdMap[tok.tokenId.toLowerCase()] = tok.tokenContract;
           }
         }
       }
@@ -466,7 +468,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // Normalize a token path entry: if it's a Bitflow token ID (no dot), resolve
       // it to a contract principal using the comprehensive map above.
       const normalizeTokenPathEntry = (entry: string): string =>
-        entry.includes('.') ? entry : (earlyTokenIdMap[entry] || entry);
+        entry.includes('.') ? entry : (earlyTokenIdMap[entry] || earlyTokenIdMap[entry.toLowerCase()] || entry);
 
       let tokenPath: string[] = (
         (routeParams['token-path']?.length  ? routeParams['token-path']  : null) ||
