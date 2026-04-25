@@ -42,7 +42,7 @@ const ROUTES_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 // localStorage route cache TTL (survives page reloads).
 const LS_ROUTES_TTL_MS = 5 * 60_000; // 5 minutes
 
-const LS_ROUTES_KEY = 'velumx_routes_v1';
+const LS_ROUTES_KEY = 'velumx_routes_v2';
 
 // ── In-memory route cache ─────────────────────────────────────────────────────
 // The Bitflow getAllRoutes API returns a Record<tokenY, SelectedSwapRoute[]>.
@@ -144,8 +144,10 @@ async function getCachedRoutes(tokenX: string, tokenY: string): Promise<any[]> {
 
   // 4. Fetch from API
   const fetchPromise = fetchRoutesFromAPI(tokenX).then(data => {
-    _routesCache.set(cacheKey, { ts: Date.now(), routes: data });
-    lsSetRoutes(cacheKey, data);
+    if (data && Object.keys(data).length > 0) {
+      _routesCache.set(cacheKey, { ts: Date.now(), routes: data });
+      lsSetRoutes(cacheKey, data);
+    }
     _routesFetching.delete(cacheKey);
     return data;
   }).catch(err => {
