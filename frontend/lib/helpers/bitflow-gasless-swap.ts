@@ -618,9 +618,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // swap-helper-a = 1 hop = 2 tokens, -b = 2 hops = 3 tokens, etc.
       const EXPECTED_TOKENS: Record<string, number> = { a: 2, b: 3, c: 4, d: 5 };
       const expectedLen = EXPECTED_TOKENS[hopSuffix];
+      let velarTokenPath = tokenPath;
       if (expectedLen && tokenPath.length > expectedLen) {
-        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Truncating.`);
-        tokenPath = tokenPath.slice(0, expectedLen);
+        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Extracting last ${expectedLen} tokens for Velar portion.`);
+        velarTokenPath = tokenPath.slice(-expectedLen);
       } else if (expectedLen && tokenPath.length < expectedLen) {
         console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Path may be incomplete.`);
       }
@@ -670,8 +671,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         toCV(poolPath[0] || (isVelarXyk 
           ? 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.xyk-pool-stx-aeusdc-v-1-1'
           : 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.stableswap-stx-ststx-v-1-2')),
-        // velar tokens (all tokens in path)
-        ...tokenPath.map(toCV),
+        // velar tokens (last N tokens in path)
+        ...velarTokenPath.map(toCV),
         // velar-share-fee-to
         contractPrincipalCV(sfAddr, sfName),
         // fee args
