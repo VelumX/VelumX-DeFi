@@ -56,6 +56,7 @@ interface SwapState {
   slippage: number;
   showSettings: boolean;
   isRegistering: boolean;
+  feeEstimate: any | null;
 }
 
 // Maps known token symbols/IDs (as stored in developer dashboard) to their
@@ -208,6 +209,7 @@ export function SwapInterface() {
     slippage: 0.5,
     showSettings: false,
     isRegistering: false,
+    feeEstimate: null,
   });
 
   // Auto-select default tokens once the shared store has tokens
@@ -305,16 +307,15 @@ export function SwapInterface() {
     try {
       const velumxClient = getVelumXClient();
       const estimate = await velumxClient.estimateFee({
-        estimatedGas: 100000,
-        feeToken: state.selectedGasToken.address // Pass the Universal Token address
+        feeToken: state.selectedGasToken.address, 
+        estimatedGas: 250000 
       });
-
-      if (estimate && estimate.maxFee) {
-        const fee = estimate.maxFee;
-        const tokenAmount = (Number(fee) / Math.pow(10, state.selectedGasToken?.decimals || 6)).toFixed(4);
-        setState(prev => ({
-          ...prev,
-          gasFee: tokenAmount,
+        
+      if (estimate) {
+        setState(prev => ({ 
+          ...prev, 
+          gasFee: (Number(estimate.maxFee) / Math.pow(10, state.selectedGasToken?.decimals || 6)).toFixed(4),
+          feeEstimate: estimate
         }));
       }
     } catch (error) {
@@ -415,6 +416,7 @@ export function SwapInterface() {
             allRoutes: state.quote.allRoutes ?? [],
             inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
           } : undefined,
+          feeEstimate: state.feeEstimate,
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }

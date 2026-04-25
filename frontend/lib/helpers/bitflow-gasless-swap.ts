@@ -33,6 +33,8 @@ export interface BitflowGaslessSwapParams {
   sponsorshipPolicy?: string;
   /** Pre-fetched quote from the UI — skips the re-fetch if provided */
   quoteResult?: QuoteResult;
+  /** Pre-fetched fee estimate from the UI — skips the network call if provided */
+  feeEstimate?: any;
   onProgress?: (status: string) => void;
 }
 
@@ -42,16 +44,21 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const velumx = getVelumXClient();
   const config = getConfig();
 
-  // 1. Get Bitflow Route & Quote
-  // Use the pre-fetched quote from the UI if available (avoids a redundant
-  // serial getQuoteForRoute call that can take 2+ minutes for some pairs).
-  onProgress?.('Fetching quote from Bitflow...');
-  
+  // 1. Start Parallel Setup (Minimize latency between click and popup)
+  onProgress?.('Initializing...');
+  const setupPromise = Promise.all([
+    // A. Estimate Fee (only if not provided by UI)
+    params.feeEstimate ? Promise.resolve(params.feeEstimate) : velumx.estimateFee({ feeToken, estimatedGas: 250000 }),
+    // B. Load Stacks Connect (dynamic import)
+    import('../stacks-loader').then(m => m.getStacksConnect())
+  ]);
+
   // Ensure tokens are loaded for decimal resolution
   if (!(bitflow as any).context?.availableTokens?.length) {
     await bitflow.getAvailableTokens();
   }
 
+  // 2. Resolve quote
   const quoteResult: QuoteResult = params.quoteResult
     ?? await bitflow.getQuoteForRoute(tokenInId, tokenOutId, Number(amountIn));
 
@@ -232,9 +239,9 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   const toOptUint = (n: bigint | number | string | undefined) =>
     n !== undefined && n !== null ? someCV(uintCV(n)) : noneCV();
 
-  // 2. Estimate Fee & Get Relayer Address
+  // 3. Await parallel setup results
   onProgress?.('Estimating gasless fee...');
-  const estimate = await velumx.estimateFee({ feeToken, estimatedGas: 250000 });
+  const [estimate, connect] = await setupPromise;
   const feeAmount = estimate.maxFee;
   
   // Use relayer address from estimate, or fallback to config
@@ -734,16 +741,13 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // 5. Request wallet signature via openContractCall (UI-based, more robust)
   onProgress?.('Waiting for wallet signature...');
 
-  return new Promise(async (resolve, reject) => {
+  if (!connect) {
+    throw new Error('Stacks Connect not available');
+  }
+
+  return new Promise((resolve, reject) => {
     try {
-      const { getStacksConnect } = await import('../stacks-loader');
-      const connect = await getStacksConnect();
-
-      if (!connect) {
-        throw new Error('Stacks Connect not available');
-      }
-
-      await connect.openContractCall({
+      connect.openContractCall({
         contractAddress: txOptions.contractAddress,
         contractName: txOptions.contractName,
         functionName: txOptions.functionName,
