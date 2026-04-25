@@ -436,16 +436,31 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // params.tokenIn/tokenOut may be Bitflow token IDs (e.g. "token-welsh"), not principals.
       // Look up the actual contract principals from the SDK's token list.
       if (tokenPath.length === 0) {
+        // Debug: log everything we have to understand what the API returned
+        console.warn('[Velar] token-path empty, attempting derivation. Available data:', {
+          tokenInId: params.tokenInId,
+          tokenIn: params.tokenIn,
+          tokenOutId: params.tokenOutId,
+          tokenOut: params.tokenOut,
+          routeTokenPath: (bestRoute as any).route?.token_path,
+          routePostConditionKeys: Object.keys((bestRoute as any).route?.postConditions || {}),
+          routePostConditionValues: Object.values((bestRoute as any).route?.postConditions || {}).map((pc: any) => pc?.tokenContract),
+          sdkTokensCount: (bitflow as any).context?.availableTokens?.length,
+        });
+
+        // Ensure SDK token list is loaded
         const sdkCtx = (bitflow as any).context;
+        if (!sdkCtx?.availableTokens?.length) {
+          try { await bitflow.getAvailableTokens(); } catch (_) {}
+        }
+
         const findContract = (tokenId: string, tokenAddress: string): string => {
-          // Try SDK token list first (most reliable)
           if (sdkCtx?.availableTokens?.length > 0) {
             const t = sdkCtx.availableTokens.find(
               (tok: any) => tok.tokenId === tokenId || tok.tokenContract === tokenAddress
             );
             if (t?.tokenContract?.includes('.')) return t.tokenContract;
           }
-          // Fall back to the address if it's already a principal
           if (tokenAddress?.includes('.')) return tokenAddress;
           return '';
         };
@@ -476,9 +491,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           c => c !== resolvedTokenIn && c !== resolvedTokenOut
         );
 
+        console.warn('[Velar] Derivation result:', { tokenInContract, tokenOutContract, resolvedTokenIn, resolvedTokenOut, pcContracts, intermediates });
+
         if (resolvedTokenIn && resolvedTokenOut) {
           tokenPath = [resolvedTokenIn, ...intermediates, resolvedTokenOut];
-          console.log('[Velar] Derived token-path from SDK token list + postConditions:', tokenPath);
+          console.log('[Velar] Derived token-path:', tokenPath);
         }
       }
 
