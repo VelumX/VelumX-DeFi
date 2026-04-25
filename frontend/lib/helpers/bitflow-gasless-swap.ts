@@ -15,7 +15,6 @@ import { getVelumXClient } from '../velumx';
 import { getConfig } from '../config';
 import { QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '../bitflow';
-import { getParallelQuote } from './bitflow-parallel-quote';
 import { bytesToHex } from '../utils/address-encoding';
 
 const bitflow = getBitflowSDK();
@@ -48,7 +47,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // serial getQuoteForRoute call that can take 2+ minutes for some pairs).
   onProgress?.('Fetching quote from Bitflow...');
   const quoteResult: QuoteResult = params.quoteResult
-    ?? await getParallelQuote(tokenInId, tokenOutId, Number(amountIn));
+    ?? await bitflow.getQuote(tokenInId, tokenOutId, Number(amountIn));
 
   // ─── Bitflow Mainnet Contract Resolution ────────────────────────────────────
   //

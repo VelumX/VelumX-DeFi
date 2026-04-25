@@ -15,7 +15,6 @@ import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
 import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '@/lib/bitflow';
-import { getParallelQuote } from '@/lib/helpers/bitflow-parallel-quote';
 import { useTokenStore } from '@/lib/hooks/useTokenStore';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
@@ -252,7 +251,7 @@ export function SwapInterface() {
 
       console.log(`[Swap] Requesting Quote: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
-      const quoteResult: QuoteResult = await getParallelQuote(tokenInId, tokenOutId, amountIn);
+      const quoteResult: QuoteResult = await bitflow.getQuote(tokenInId, tokenOutId, amountIn);
       console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
         hasBestRoute: !!quoteResult?.bestRoute,
         allRoutesCount: quoteResult?.allRoutes?.length,
@@ -330,19 +329,6 @@ export function SwapInterface() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.inputToken, state.outputToken, state.inputAmount]);
 
-  // Prefetch routes as soon as the token pair is known — before the user
-  // finishes typing an amount. By the time fetchQuote runs, the route list
-  // is already cached so the quote only needs the read-only calls.
-  useEffect(() => {
-    if (!state.inputToken || !state.outputToken) return;
-    const tokenInId = state.inputToken.tokenId || state.inputToken.address;
-    const tokenOutId = state.outputToken.tokenId || state.outputToken.address;
-    if (!tokenInId || !tokenOutId) return;
-    import('@/lib/helpers/bitflow-parallel-quote').then(({ prefetchRoutes }) => {
-      prefetchRoutes(tokenInId, tokenOutId);
-    }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.inputToken?.address, state.outputToken?.address]);
 
   // Separate effect for fee estimate — doesn't block or delay quotes
   useEffect(() => {
