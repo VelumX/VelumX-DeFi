@@ -662,15 +662,16 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         provider ? someCV(principalCV(provider)) : noneCV(),
         swapsReversed ? trueCV() : falseCV(),
         // ss/xyk token-a, token-b (first two tokens in path)
-        toCV(tokenPath[0]),
-        toCV(tokenPath[1] ?? tokenPath[0]),
+        // If poolPath is empty (pure Velar), we MUST set ss-token-a = velar-token-a
+        // to trigger the paymaster's skip logic for the Bitflow hop.
+        toCV(poolPath.length > 0 ? tokenPath[0] : velarTokenPath[0]),
+        toCV(poolPath.length > 0 ? (tokenPath[1] ?? tokenPath[0]) : velarTokenPath[0]),
         // ss/xyk pool-a
         // If poolPath is empty (pure Velar route), we MUST provide a valid pool contract
         // that satisfies the paymaster's trait requirement, even if it goes unused.
-        // The router contract does NOT implement the pool trait, so passing resolvedPool throws BadFunctionArgument.
         toCV(poolPath[0] || (isVelarXyk 
-          ? 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.xyk-pool-stx-aeusdc-v-1-1'
-          : 'SPQC38PW542EQJ5M11CR25P7BS1CA6QT4TBXGB3M.stableswap-stx-ststx-v-1-2')),
+          ? 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.xyk-pool-stx-aeusdc-v-1-1'
+          : 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.stableswap-stx-ststx-v-1-2')),
         // velar tokens (last N tokens in path)
         ...velarTokenPath.map(toCV),
         // velar-share-fee-to

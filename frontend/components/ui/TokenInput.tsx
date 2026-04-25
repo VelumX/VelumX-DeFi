@@ -53,6 +53,24 @@ export function TokenInput({
         (t.name?.toLowerCase() || '').includes(search.toLowerCase())
     );
 
+    const sortedTokens = React.useMemo(() => {
+        if (!getTokenBalance) return filteredTokens;
+        return [...filteredTokens].sort((a, b) => {
+            const balA = parseFloat(getTokenBalance(a) || '0');
+            const balB = parseFloat(getTokenBalance(b) || '0');
+            
+            if (balA > 0 && balB <= 0) return -1;
+            if (balA <= 0 && balB > 0) return 1;
+            if (balA > 0 && balB > 0) {
+                // Both have balance, sort by amount descending
+                if (balA !== balB) return balB - balA;
+            }
+            
+            // Equal balance (both 0 or same amount), sort alphabetically
+            return a.symbol.localeCompare(b.symbol);
+        });
+    }, [filteredTokens, getTokenBalance]);
+
     const handleImageError = (tokenAddress: string) => {
         setImageErrors(prev => new Set(prev).add(tokenAddress));
     };
@@ -155,7 +173,7 @@ export function TokenInput({
 
                                 {/* List */}
                                 <div className="overflow-y-auto max-h-64" style={{ backgroundColor: 'var(--bg-surface)' }}>
-                                    {filteredTokens.length > 0 ? filteredTokens.map(t => {
+                                    {sortedTokens.length > 0 ? sortedTokens.map(t => {
                                         const tokenBal = getTokenBalance ? getTokenBalance(t) : '0';
                                         const hasBalance = parseFloat(tokenBal) > 0;
                                         return (
