@@ -568,7 +568,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         }
       }
 
-      const poolPath: string[] =
+      let poolPath: string[] =
         (routeParams['pool-path']?.length  ? routeParams['pool-path']  : null) ||
         (routeParams['poolPath']?.length   ? routeParams['poolPath']   : null) ||
         (quoteParams['pool-path']?.length  ? quoteParams['pool-path']  : null) ||
@@ -656,6 +656,19 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         );
       }
 
+      // ── Argument Reconstruction ───────────────────────────────────────────
+      // We must match the Paymaster's positional signature exactly.
+      // Current suspect: Missing pool arguments for Velar multihops.
+      
+      // Attempt to recover poolPath if missing (Bitflow API sometimes omits it from parameters)
+      if (poolPath.length === 0) {
+        const recoveredPools = (bestRoute as any).route?.pool_path || (bestRoute as any).poolPath || [];
+        if (recoveredPools.length > 0) {
+          console.log('[Velar] Recovered poolPath from route data:', recoveredPools);
+          poolPath = recoveredPools;
+        }
+      }
+
       const baseArgs = [
         uintCV(amountInRaw),
         uintCV(minOut),
@@ -667,8 +680,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         toCV(poolPath.length > 0 ? tokenPath[0] : velarTokenPath[0]),
         toCV(poolPath.length > 0 ? (tokenPath[1] ?? tokenPath[0]) : velarTokenPath[0]),
         // ss/xyk pool-a
-        // If poolPath is empty (pure Velar route), we MUST provide a valid pool contract
-        // that satisfies the paymaster's trait requirement, even if it goes unused.
         toCV(poolPath[0] || (isVelarXyk 
           ? 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.xyk-pool-stx-aeusdc-v-1-1'
           : 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.stableswap-stx-ststx-v-1-2')),
@@ -687,8 +698,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         functionName,
         router: resolvedPool,
         tokenPath,
+        velarTokenPath,
         poolPath,
         argsCount: baseArgs.length,
+        argsSummary: baseArgs.map((a, i) => `[${i}] ${a.type}`).join(', '),
       });
     } else {
       // For stableswap and standard router routes, use getSwapParams to get the
