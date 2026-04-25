@@ -682,7 +682,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       ];
 
       txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs: baseArgs };
-      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1 Velar)', {
+      console.log(`[Policy] Using USER_PAYS (${paymasterName} Velar)`, {
         functionName,
         router: resolvedPool,
         tokenPath,
