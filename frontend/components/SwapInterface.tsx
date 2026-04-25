@@ -251,7 +251,7 @@ export function SwapInterface() {
 
       console.log(`[Swap] Requesting Quote: ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
-      const quoteResult: QuoteResult = await bitflow.getQuote(tokenInId, tokenOutId, amountIn);
+      const quoteResult: QuoteResult = await bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
       console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
         hasBestRoute: !!quoteResult?.bestRoute,
         allRoutesCount: quoteResult?.allRoutes?.length,
