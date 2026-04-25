@@ -236,14 +236,11 @@ export function SwapInterface() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokens]);
 
-  // ── Quote request cancellation & staleness tracking ───────────────────────
-  const quoteAbortRef = useRef<AbortController | null>(null);
+  // ── Quote staleness tracking ──────────────────────────────────────────────
   const quoteGenRef = useRef(0);
 
   /**
    * Fetch a swap quote from Bitflow with:
-   *   • AbortController — cancels the in-flight network request if the user
-   *     changes inputs before it resolves
    *   • 20-second timeout — prevents the UI from hanging on slow / dead APIs
    *   • Generation counter — discards stale responses that arrive after a
    *     newer request has already been fired
@@ -252,17 +249,12 @@ export function SwapInterface() {
   const fetchQuote = useCallback(async (retryCount = 0) => {
     if (!state.inputToken || !state.outputToken || !state.inputAmount) return;
 
-    // Cancel any in-flight request before starting a new one
-    if (quoteAbortRef.current) {
-      quoteAbortRef.current.abort();
-    }
-    const controller = new AbortController();
-    quoteAbortRef.current = controller;
-
     // Bump generation so stale responses are ignored
     const generation = ++quoteGenRef.current;
 
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
+
+    let timeoutId: NodeJS.Timeout | undefined;
 
     try {
       const bitflow = getBitflowSDK();
@@ -284,24 +276,21 @@ export function SwapInterface() {
       // Race the SDK call against a timeout
       const quotePromise = bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
       const timeoutPromise = new Promise<never>((_, reject) => {
-        const id = setTimeout(() => {
-          controller.abort();
+        timeoutId = setTimeout(() => {
           reject(new Error('Quote request timed out'));
         }, QUOTE_TIMEOUT_MS);
-        // Clean up the timer if the controller is aborted externally
-        controller.signal.addEventListener('abort', () => clearTimeout(id));
       });
 
       const quoteResult: QuoteResult = await Promise.race([quotePromise, timeoutPromise]);
 
+      // Clear the timeout if the quote succeeded
+      if (timeoutId) clearTimeout(timeoutId);
+
       // If a newer request was fired while we were waiting, discard this result
       if (generation !== quoteGenRef.current) {
-        console.log(`[Swap] Discarding stale quote (gen ${generation}, current ${quoteGenRef.current})`);
+        console.log(`[Swap] Discarding stale quote (gen ${generation})`);
         return;
       }
-
-      // If this request was aborted, bail silently
-      if (controller.signal.aborted) return;
 
       console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
         hasBestRoute: !!quoteResult?.bestRoute,
@@ -335,11 +324,7 @@ export function SwapInterface() {
         isFetchingQuote: false,
       }));
     } catch (error: any) {
-      // Silently ignore aborted requests (user changed input)
-      if (error?.name === 'AbortError' || controller.signal.aborted) {
-        console.log(`[Swap] Quote request aborted (gen ${generation})`);
-        return;
-      }
+      if (timeoutId) clearTimeout(timeoutId);
 
       // Ignore stale errors
       if (generation !== quoteGenRef.current) return;
@@ -399,12 +384,7 @@ export function SwapInterface() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.inputToken, state.outputToken, state.inputAmount]);
 
-  // Cancel in-flight quote when component unmounts
-  useEffect(() => {
-    return () => {
-      if (quoteAbortRef.current) quoteAbortRef.current.abort();
-    };
-  }, []);
+
 
   // Separate effect for fee estimate — doesn't block or delay quotes
   useEffect(() => {
