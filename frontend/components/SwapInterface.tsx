@@ -21,8 +21,6 @@ import { SettingsPanel } from './ui/SettingsPanel';
 import { GaslessToggle } from './ui/GaslessToggle';
 import { TransactionStatus } from './ui/TransactionStatus';
 
-/** Timeout for quote API calls (ms) */
-const QUOTE_TIMEOUT_MS = 20_000;
 /** Debounce delay before firing a quote request (ms) */
 const QUOTE_DEBOUNCE_MS = 600;
 
@@ -378,35 +376,6 @@ export function SwapInterface() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.gaslessMode, state.selectedGasToken]);
 
-  // ── Eagerly pre-load Stacks Connect & Network ──────────────────────────────
-  // These are needed by the wallet signing popup. Loading them before the user
-  // clicks "Swap" ensures openContractCall fires within the browser's
-  // user-gesture timeout window (~1s), preventing popup-block issues.
-  const connectRef = useRef<any>(null);
-  const networkRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!stacksConnected) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { getStacksConnect, getNetworkInstance } = await import('@/lib/stacks-loader');
-        const [c, n] = await Promise.all([
-          getStacksConnect(),
-          getNetworkInstance(true),
-        ]);
-        if (!cancelled) {
-          connectRef.current = c;
-          networkRef.current = n;
-          console.log('[Swap] Stacks Connect & Network pre-loaded');
-        }
-      } catch (e) {
-        console.warn('[Swap] Failed to pre-load Stacks modules:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [stacksConnected]);
-
   const switchTokens = () => {
     setState(prev => ({
       ...prev,
@@ -477,8 +446,6 @@ export function SwapInterface() {
             inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
           } : undefined,
           feeEstimate: state.feeEstimate,
-          preloadedConnect: connectRef.current,
-          preloadedNetwork: networkRef.current,
           onProgress: (step) => {
             setState(prev => ({ ...prev, success: step }));
           }
@@ -530,55 +497,42 @@ export function SwapInterface() {
           tokenYDecimals: state.outputToken.decimals,
         }, stacksAddress, state.slippage / 100);
 
-        // Use pre-loaded connect/network, fallback to dynamic import if needed
-        let connect = connectRef.current;
-        let network = networkRef.current;
-        if (!connect || !network) {
-          const loader = await import('@/lib/stacks-loader');
-          connect = connect || await loader.getStacksConnect();
-          network = network || await loader.getNetworkInstance(true);
-        }
-
-        await connect.openContractCall({
-          contractAddress: swapParams.contractAddress,
-          contractName: swapParams.contractName,
+        const { request: stacksRequest } = await import('@stacks/connect');
+        const result = await stacksRequest('stx_callContract', {
+          contract: `${swapParams.contractAddress}.${swapParams.contractName}`,
           functionName: swapParams.functionName,
           functionArgs: swapParams.functionArgs,
-          network: network,
-          anchorMode: 'any',
+          network: 'mainnet',
           postConditionMode: 'allow',
           postConditions: [],
-          onFinish: (data: any) => {
-            setState(prev => ({
-              ...prev,
-              isProcessing: false,
-              success: `Swap submitted! TX: ${data.txid}. Waiting for confirmation...`,
-              inputAmount: '',
-              outputAmount: '',
-              quote: null,
-            }));
-            if (fetchBalances && stacksAddress) {
-              const inputToken = state.inputToken;
-              const prevInputBalance = getBalance(inputToken);
-              const maxAttempts = 60;
-              let attempts = 0;
-              const poll = async () => {
-                attempts++;
-                await fetchBalances();
-                const newBalance = getBalance(inputToken);
-                if (newBalance !== prevInputBalance) {
-                  setState(prev => ({ ...prev, success: `Swap confirmed! TX: ${data.txid}` }));
-                  return;
-                }
-                if (attempts < maxAttempts) setTimeout(poll, 15000);
-              };
-              setTimeout(poll, 10000);
-            }
-          },
-          onCancel: () => {
-            setState(prev => ({ ...prev, isProcessing: false }));
-          }
         });
+
+        const txid = (result as any).txid;
+        setState(prev => ({
+          ...prev,
+          isProcessing: false,
+          success: `Swap submitted! TX: ${txid}. Waiting for confirmation...`,
+          inputAmount: '',
+          outputAmount: '',
+          quote: null,
+        }));
+        if (fetchBalances && stacksAddress) {
+          const inputToken = state.inputToken;
+          const prevInputBalance = getBalance(inputToken);
+          const maxAttempts = 60;
+          let attempts = 0;
+          const poll = async () => {
+            attempts++;
+            await fetchBalances();
+            const newBalance = getBalance(inputToken);
+            if (newBalance !== prevInputBalance) {
+              setState(prev => ({ ...prev, success: `Swap confirmed! TX: ${txid}` }));
+              return;
+            }
+            if (attempts < maxAttempts) setTimeout(poll, 15000);
+          };
+          setTimeout(poll, 10000);
+        }
       }
     } catch (error) {
       console.error('Swap error:', error);
