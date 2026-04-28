@@ -27,6 +27,10 @@ import { getBitflowSDK, BITFLOW_CONFIG } from '@/lib/bitflow';
 const DIRECT_NODE_URL = 'https://api.mainnet.hiro.so';
 const DIRECT_BITFLOW_API = 'https://api.bitflowapis.finance';
 
+// Server-side Hiro proxy — injects HIRO_API_KEY for 900 RPM.
+// Falls back to direct Hiro if the proxy isn't available (e.g. local dev without the route).
+const HIRO_PROXY_URL = '/api/hiro';
+
 // Cap: only quote the top N routes.
 const MAX_ROUTES = 5;
 
@@ -179,10 +183,20 @@ function getCachedAbi(deployer: string, name: string): Promise<any> {
   const key = `${deployer}.${name}`;
   if (!_abiCache.has(key)) {
     const p = fetch(
-      `${DIRECT_NODE_URL}/v2/contracts/interface/${deployer}/${name}`,
+      `${HIRO_PROXY_URL}/v2/contracts/interface/${deployer}/${name}`,
       { headers: { Accept: 'application/json', 'Content-Type': 'application/json' } },
     )
-      .then(r => { if (!r.ok) throw new Error(`ABI ${key}: ${r.status}`); return r.json(); })
+      .then(r => {
+        if (!r.ok) throw new Error(`ABI ${key}: ${r.status}`);
+        return r.json();
+      })
+      .catch(() =>
+        // Fallback: Bitflow node proxy (node.bitflowapis.finance)
+        fetch(
+          `/api/bitflow-node/v2/contracts/interface/${deployer}/${name}`,
+          { headers: { Accept: 'application/json', 'Content-Type': 'application/json' } },
+        ).then(r => { if (!r.ok) throw new Error(`ABI ${key}: ${r.status}`); return r.json(); })
+      )
       .catch(e => { _abiCache.delete(key); throw e; });
     _abiCache.set(key, p);
   }
@@ -388,23 +402,31 @@ export async function getParallelQuote(
     // Build Clarity args
     const functionArgs = fnDef.args.map((a: any) => buildCv(p[a.name], a.type));
 
-    const result = await fetchCallReadOnlyFunction({
-      contractAddress: deployer,
-      contractName,
-      functionName: qd.function,
-      functionArgs,
-      network: 'mainnet',
-      client: {
-        baseUrl: DIRECT_NODE_URL,
-        fetch: (url: string, init?: RequestInit) => {
-          const h = new Headers((init as any)?.headers);
-          h.set('Accept', 'application/json');
-          h.set('Content-Type', 'application/json');
-          return fetch(url, { ...init, headers: h });
-        },
-      },
-      senderAddress: deployer,
-    });
+    // Try Hiro proxy first (authenticated, 900 RPM), fall back to Bitflow node
+    const hiroFetch = (url: string, init?: RequestInit) => {
+      const h = new Headers((init as any)?.headers);
+      h.set('Accept', 'application/json');
+      h.set('Content-Type', 'application/json');
+      return fetch(url, { ...init, headers: h });
+    };
+
+    const callReadOnly = async (baseUrl: string) =>
+      fetchCallReadOnlyFunction({
+        contractAddress: deployer,
+        contractName,
+        functionName: qd.function,
+        functionArgs,
+        network: 'mainnet',
+        client: { baseUrl, fetch: hiroFetch },
+        senderAddress: deployer,
+      });
+
+    let result: any;
+    try {
+      result = await callReadOnly(HIRO_PROXY_URL);
+    } catch {
+      result = await callReadOnly('/api/bitflow-node');
+    }
 
     const raw = unwrap(result);
     if (raw === null || raw <= 0) throw new Error('Invalid quote result');
