@@ -37,10 +37,13 @@ const QUOTE_TIMEOUT_MS = 1500;
 const ROUTE_DISCOVERY_TIMEOUT_MS = 90000; // 90s timeout for heavy tokens like WELSH
 
 // In-memory route cache TTL.
-const ROUTES_CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+const ROUTES_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
 
 // localStorage route cache TTL (survives page reloads).
-const LS_ROUTES_TTL_MS = 5 * 60_000; // 5 minutes
+const LS_ROUTES_TTL_MS = 30 * 60_000; // 30 minutes
+
+// Quote result cache TTL — amount-specific, shorter TTL since prices move.
+const QUOTE_CACHE_TTL_MS = 60_000; // 1 minute
 
 const LS_ROUTES_KEY = 'velumx_routes_v4';
 
@@ -50,6 +53,11 @@ const _routesCache = new Map<string, { ts: number; routes: Record<string, any[]>
 
 // In-flight route fetches — prevents duplicate concurrent requests for the same token
 const _routesFetching = new Map<string, Promise<Record<string, any[]>>>();
+
+// ── Quote result cache ────────────────────────────────────────────────────────
+// Keyed by `${tokenX}:${tokenY}:${amount}` — avoids re-running on-chain calls
+// when the user hasn't changed the pair or amount (e.g. switching tabs, re-renders).
+const _quoteCache = new Map<string, { ts: number; result: QuoteResult }>();
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -305,6 +313,14 @@ export async function getParallelQuote(
   const sdk = getBitflowSDK();
   const ctx = (sdk as any).context;
 
+  // Check quote cache first — skip all on-chain calls if we have a fresh result
+  const quoteKey = `${tokenX}:${tokenY}:${amount}`;
+  const cachedQuote = _quoteCache.get(quoteKey);
+  if (cachedQuote && Date.now() - cachedQuote.ts < QUOTE_CACHE_TTL_MS) {
+    console.log(`[ParallelQuote] Cache hit for ${quoteKey} (${((Date.now() - cachedQuote.ts) / 1000).toFixed(0)}s old)`);
+    return cachedQuote.result;
+  }
+
   // Kick off token load in background (non-blocking) if not already loaded.
   // Route discovery and quoting don't need to wait for this.
   if (ctx.availableTokens.length === 0) {
@@ -448,5 +464,12 @@ export async function getParallelQuote(
 
   console.log(`[ParallelQuote] Total: ${(performance.now() - t0).toFixed(0)}ms, best: ${bestRoute?.quote?.toFixed(4) ?? 'none'}`);
 
-  return { bestRoute, allRoutes, inputData: { tokenX, tokenY, amountInput: amount } };
+  const quoteResult: QuoteResult = { bestRoute, allRoutes, inputData: { tokenX, tokenY, amountInput: amount } };
+
+  // Cache the result (only if we got a valid quote)
+  if (bestRoute) {
+    _quoteCache.set(quoteKey, { ts: Date.now(), result: quoteResult });
+  }
+
+  return quoteResult;
 }
