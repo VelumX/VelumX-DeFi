@@ -651,34 +651,76 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       }
 
       // ── Argument Reconstruction ───────────────────────────────────────────
-      // We must match the Paymaster's positional signature exactly.
-      // Current suspect: Missing pool arguments for Velar multihops.
-      
-      // Attempt to recover poolPath if missing (Bitflow API sometimes omits it from parameters)
-      if (poolPath.length === 0) {
-        const recoveredPools = (bestRoute as any).route?.pool_path || (bestRoute as any).poolPath || [];
-        if (recoveredPools.length > 0) {
-          console.log('[Velar] Recovered poolPath from route data:', recoveredPools);
-          poolPath = recoveredPools;
+      // The Bitflow API's quoteData.parameters for router-stableswap-velar-v-1-5
+      // contains structured fields: stableswap-tokens{a,b}, stableswap-pools{a},
+      // velar-tokens{a,b,...}. Use these directly — they are always populated
+      // for the quote call and are the authoritative source for pool/token args.
+      // pool-path is unreliable (often empty) and should not be used.
+
+      // Extract ss-token-a/b and ss-pool-a from quoteData.parameters
+      const qpSsTokens = quoteParams['stableswap-tokens'] || routeParams['stableswap-tokens'];
+      const qpSsPools  = quoteParams['stableswap-pools']  || routeParams['stableswap-pools'];
+      const qpVelarTokens = quoteParams['velar-tokens']   || routeParams['velar-tokens'];
+
+      // Resolve a value that may be a contract principal string or a tuple field
+      const resolveField = (val: any): string | null => {
+        if (!val) return null;
+        if (typeof val === 'string') return resolveP(val);
+        // Tuple object — shouldn't happen here but guard anyway
+        return null;
+      };
+
+      const ssTokenA = resolveField(qpSsTokens?.a);
+      const ssTokenB = resolveField(qpSsTokens?.b);
+      const ssPoolA  = resolveField(qpSsPools?.a);
+
+      // Velar tokens from quoteData (a, b, c, d, e depending on hop count)
+      const velarTokensFromQD: string[] = [];
+      if (qpVelarTokens) {
+        for (const key of ['a', 'b', 'c', 'd', 'e']) {
+          const v = resolveField(qpVelarTokens[key]);
+          if (v) velarTokensFromQD.push(v);
         }
       }
+
+      // Use quoteData-derived velar tokens if available, fall back to velarTokenPath
+      const finalVelarTokens = velarTokensFromQD.length >= (expectedLen ?? 0)
+        ? velarTokensFromQD.slice(0, expectedLen ?? velarTokensFromQD.length)
+        : velarTokenPath;
+
+      // ss-token-a/b: use quoteData if available, else first two tokens of path
+      const finalSsTokenA = ssTokenA || (tokenPath.length > 0 ? resolveP(tokenPath[0]) : null) || resolveP(velarTokenPath[0]);
+      const finalSsTokenB = ssTokenB || (tokenPath.length > 1 ? resolveP(tokenPath[1]) : null) || resolveP(velarTokenPath[0]);
+
+      // ss-pool-a: use quoteData if available, else fall back to pool-path
+      const finalSsPool = ssPoolA || poolPath[0] || null;
+
+      if (!finalSsPool) {
+        throw new Error(
+          `[Velar] Cannot determine stableswap pool for ${functionName}. ` +
+          `quoteData.parameters['stableswap-pools'] is missing and pool-path is empty. ` +
+          `Route data: ${JSON.stringify({ qpSsPools, poolPath })}`
+        );
+      }
+
+      const toCVStr = (s: string | null) => {
+        if (!s) throw new Error(`[Velar] Null principal in arg construction`);
+        const [a, n] = s.split('.');
+        return contractPrincipalCV(a, n);
+      };
 
       const baseArgs = [
         uintCV(amountInRaw),
         uintCV(minOut),
         provider ? someCV(principalCV(provider)) : noneCV(),
         swapsReversed ? trueCV() : falseCV(),
-        // ss/xyk token-a, token-b (first two tokens in path)
-        // If poolPath is empty (pure Velar), we MUST set ss-token-a = velar-token-a
-        // to trigger the paymaster's skip logic for the Bitflow hop.
-        toCV(poolPath.length > 0 ? tokenPath[0] : velarTokenPath[0]),
-        toCV(poolPath.length > 0 ? (tokenPath[1] ?? tokenPath[0]) : velarTokenPath[0]),
+        // ss/xyk token-a, token-b
+        toCVStr(finalSsTokenA),
+        toCVStr(finalSsTokenB),
         // ss/xyk pool-a
-        toCV(poolPath[0] || (isVelarXyk 
-          ? 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.xyk-pool-stx-aeusdc-v-1-1'
-          : 'SP1Y5YSTAHZ88XYK1VPDH24GY0HPX5J4JECTMY4A1.stableswap-stx-ststx-v-1-2')),
-        // velar tokens (last N tokens in path)
-        ...velarTokenPath.map(toCV),
+        toCVStr(finalSsPool),
+        // velar tokens (N tokens for N-hop)
+        ...finalVelarTokens.map(t => toCVStr(resolveP(t))),
         // velar-share-fee-to
         contractPrincipalCV(sfAddr, sfName),
         // fee args
@@ -691,11 +733,11 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       console.log(`[Policy] Using USER_PAYS (${paymasterName} Velar)`, {
         functionName,
         router: resolvedPool,
-        tokenPath,
-        velarTokenPath,
-        poolPath,
+        ssTokenA: finalSsTokenA,
+        ssTokenB: finalSsTokenB,
+        ssPool: finalSsPool,
+        velarTokens: finalVelarTokens,
         argsCount: baseArgs.length,
-        argsSummary: baseArgs.map((a, i) => `[${i}] ${a.type}`).join(', '),
       });
     } else {
       // For stableswap and standard router routes, use getSwapParams to get the
