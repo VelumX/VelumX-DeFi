@@ -12,8 +12,9 @@ import { ArrowDownUp, Settings, Info, Loader2, AlertTriangle, Wallet, ChevronDow
 import { formatUnits, parseUnits } from 'viem';
 import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
-import { BitflowSDK, type QuoteResult } from '@bitflowlabs/core-sdk';
+import { type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '@/lib/bitflow';
+import { getParallelQuote } from '@/lib/helpers/bitflow-parallel-quote';
 import { useTokenStore } from '@/lib/hooks/useTokenStore';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
@@ -254,11 +255,7 @@ export function SwapInterface() {
 
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
 
-    let timeoutId: NodeJS.Timeout | undefined;
-
     try {
-      const bitflow = getBitflowSDK();
-      
       // Helper to find tokenId from the discovered tokens list if missing
       const getTokenId = (token: Token) => {
         if (token.tokenId) return token.tokenId;
@@ -273,18 +270,7 @@ export function SwapInterface() {
 
       console.log(`[Swap] Requesting Quote (gen ${generation}): ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
 
-      // Race the SDK call against a timeout
-      const quotePromise = bitflow.getQuoteForRoute(tokenInId, tokenOutId, amountIn);
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error('Quote request timed out'));
-        }, QUOTE_TIMEOUT_MS);
-      });
-
-      const quoteResult: QuoteResult = await Promise.race([quotePromise, timeoutPromise]);
-
-      // Clear the timeout if the quote succeeded
-      if (timeoutId) clearTimeout(timeoutId);
+      const quoteResult: QuoteResult = await getParallelQuote(tokenInId, tokenOutId, amountIn);
 
       // If a newer request was fired while we were waiting, discard this result
       if (generation !== quoteGenRef.current) {
@@ -324,8 +310,6 @@ export function SwapInterface() {
         isFetchingQuote: false,
       }));
     } catch (error: any) {
-      if (timeoutId) clearTimeout(timeoutId);
-
       // Ignore stale errors
       if (generation !== quoteGenRef.current) return;
 
