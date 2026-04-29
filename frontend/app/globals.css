@@ -29,11 +29,15 @@
   }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-      sans-serif;
+    /* Use the device's system font so user font preferences are respected.
+       Geist is still available via var(--font-geist-sans) for specific elements. */
+    font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont,
+      'Segoe UI', system-ui, sans-serif;
+    font-size: 1rem; /* relative to the user's browser/device base font size */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%; /* prevent iOS from auto-adjusting font sizes */
+    text-size-adjust: 100%;
   }
 }
 

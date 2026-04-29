@@ -14,7 +14,7 @@ import { encodeStacksAddress, bytesToHex } from '@/lib/utils/address-encoding';
 import { getVelumXClient } from '@/lib/velumx';
 import { type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '@/lib/bitflow';
-import { getParallelQuote } from '@/lib/helpers/bitflow-parallel-quote';
+import { getParallelQuote, getRoutableTokenIds } from '@/lib/helpers/bitflow-parallel-quote';
 import { useTokenStore } from '@/lib/hooks/useTokenStore';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
@@ -237,6 +237,36 @@ export function SwapInterface() {
 
   // ── Quote staleness tracking ──────────────────────────────────────────────
   const quoteGenRef = useRef(0);
+
+  // ── Routable output tokens ────────────────────────────────────────────────
+  // Set of tokenIds reachable from the current input token — used to filter
+  // the output token dropdown. Updated whenever the input token changes.
+  const [routableTokenIds, setRoutableTokenIds] = React.useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!state.inputToken) return;
+    const getTokenId = (token: Token) =>
+      token.tokenId || tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase())?.tokenId || token.address;
+    const tokenInId = getTokenId(state.inputToken);
+
+    // Sync from cache immediately (instant if already loaded)
+    const cached = getRoutableTokenIds(tokenInId);
+    if (cached.size > 0) setRoutableTokenIds(cached);
+
+    // Also subscribe to the background fetch completing
+    let cancelled = false;
+    const poll = setInterval(() => {
+      const fresh = getRoutableTokenIds(tokenInId);
+      if (fresh.size > 0 && !cancelled) {
+        setRoutableTokenIds(fresh);
+        clearInterval(poll);
+      }
+    }, 500);
+    // Stop polling after 30s max
+    const timeout = setTimeout(() => clearInterval(poll), 30_000);
+    return () => { cancelled = true; clearInterval(poll); clearTimeout(timeout); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.inputToken]);
 
   /**
    * Fetch a swap quote from Bitflow with:
@@ -643,10 +673,15 @@ export function SwapInterface() {
             setAmount={() => { }}
             token={state.outputToken}
             setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
-            tokens={tokens}
+            tokens={routableTokenIds.size > 0
+              ? tokens.filter(t => {
+                  const id = t.tokenId || t.address;
+                  return routableTokenIds.has(id);
+                })
+              : tokens}
             balance={getBalance(state.outputToken)}
             isProcessing={state.isProcessing}
-            isLoadingTokens={isDiscovering}
+            isLoadingTokens={isDiscovering || (routableTokenIds.size === 0 && !!state.inputToken)}
             variant="blue"
             getTokenBalance={getBalance}
           />

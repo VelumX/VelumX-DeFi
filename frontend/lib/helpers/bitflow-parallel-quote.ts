@@ -284,6 +284,46 @@ export async function prefetchRoutes(tokenX: string, tokenY: string): Promise<vo
   } catch (_) {}
 }
 
+// ── Public: get routable token IDs ────────────────────────────────────────────
+// Returns the set of tokenY IDs that have at least one route from tokenX.
+// Uses the in-memory / localStorage cache — instant if already loaded.
+// Triggers a background fetch if not cached yet (non-blocking).
+
+export function getRoutableTokenIds(tokenX: string): Set<string> {
+  const cacheKey = tokenX;
+
+  // Check in-memory cache first
+  const mem = _routesCache.get(cacheKey);
+  if (mem && Date.now() - mem.ts < ROUTES_CACHE_TTL_MS) {
+    return new Set(Object.keys(mem.routes));
+  }
+
+  // Check localStorage
+  const lsData = lsGetRoutes(cacheKey);
+  if (lsData) {
+    _routesCache.set(cacheKey, { ts: Date.now(), routes: lsData });
+    return new Set(Object.keys(lsData));
+  }
+
+  // Not cached — trigger background fetch and return empty set for now
+  if (!_routesFetching.has(cacheKey)) {
+    const fetchPromise = fetchRoutesFromAPI(tokenX).then(data => {
+      if (data && Object.keys(data).length > 0) {
+        _routesCache.set(cacheKey, { ts: Date.now(), routes: data });
+        lsSetRoutes(cacheKey, data);
+      }
+      _routesFetching.delete(cacheKey);
+      return data;
+    }).catch(err => {
+      _routesFetching.delete(cacheKey);
+      throw err;
+    });
+    _routesFetching.set(cacheKey, fetchPromise);
+  }
+
+  return new Set(); // empty until fetch completes
+}
+
 // ── Token decimal resolution ──────────────────────────────────────────────────
 // Resolve token decimals without blocking on the SDK's getAvailableTokens().
 // Try the shared useTokenStore cache first (already populated at module load),
