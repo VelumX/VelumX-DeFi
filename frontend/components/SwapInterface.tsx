@@ -642,7 +642,7 @@ export function SwapInterface() {
             amount={state.inputAmount}
             setAmount={(val: string) => setState(prev => ({ ...prev, inputAmount: val, error: null }))}
             token={state.inputToken}
-            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
             tokens={tokens}
             balance={getBalance(state.inputToken)}
             isProcessing={state.isProcessing}
@@ -672,7 +672,7 @@ export function SwapInterface() {
             amount={state.outputAmount}
             setAmount={() => { }}
             token={state.outputToken}
-            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
             tokens={routableTokenIds.size > 0
               ? tokens.filter(t => {
                   const id = t.tokenId || t.address;
