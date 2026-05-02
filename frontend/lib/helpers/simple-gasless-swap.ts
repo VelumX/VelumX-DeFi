@@ -100,7 +100,7 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
   // Step 5: Fetch nonce
   let nonce = 0n;
   try {
-    const nonceRes = await fetch(`https://api.mainnet.hiro.so/v2/accounts/${params.userAddress}?proof=0`);
+    const nonceRes = await fetch(`/api/hiro/v2/accounts/${params.userAddress}?proof=0`);
     if (nonceRes.ok) {
       const accountData = await nonceRes.json();
       nonce = BigInt(accountData.nonce ?? 0);

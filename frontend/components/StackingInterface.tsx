@@ -42,7 +42,7 @@ export function StackingInterface() {
       try {
         // get-stx-per-ststx returns the ratio as a uint (in 1e6 units)
         const ratioRes = await fetch(
-          `https://api.mainnet.hiro.so/v2/contracts/call-read/${STACKING_DAO_CORE.split('.')[0]}/${STACKING_DAO_CORE.split('.')[1]}/get-stx-per-ststx`,
+          `/api/hiro/v2/contracts/call-read/${STACKING_DAO_CORE.split('.')[0]}/${STACKING_DAO_CORE.split('.')[1]}/get-stx-per-ststx`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

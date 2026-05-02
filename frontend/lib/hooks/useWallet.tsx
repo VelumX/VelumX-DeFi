@@ -140,10 +140,30 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const fetchStacksBalances = useCallback(async (address: string) => {
     if (!address) return;
     try {
-      const apiUrl = 'https://api.mainnet.hiro.so';
-      
-      // Fetch personal balances
-      const response = await fetch(`${apiUrl}/extended/v1/address/${address}/balances`);
+      // ── All Hiro calls go through /api/hiro so the server-side API key is
+      //    injected, avoiding CORS errors and the anonymous 50 RPM rate limit.
+      const HIRO_PROXY = '/api/hiro';
+
+      // ── Persistent decimals cache ─────────────────────────────────────────
+      // Token decimals never change, so we cache them in localStorage forever.
+      // This means we only ever call Hiro once per token, not once per session.
+      const DECIMALS_CACHE_KEY = 'velumx_token_decimals_v1';
+      let decimalsCache: Record<string, string> = {};
+      try {
+        const raw = localStorage.getItem(DECIMALS_CACHE_KEY);
+        if (raw) decimalsCache = JSON.parse(raw);
+      } catch { /* ignore */ }
+
+      const saveDecimalsCache = (updates: Record<string, string>) => {
+        try {
+          const merged = { ...decimalsCache, ...updates };
+          localStorage.setItem(DECIMALS_CACHE_KEY, JSON.stringify(merged));
+          decimalsCache = merged;
+        } catch { /* localStorage full */ }
+      };
+
+      // Fetch personal balances via proxy
+      const response = await fetch(`${HIRO_PROXY}/extended/v1/address/${address}/balances`);
 
       if (!response.ok) {
         throw new Error('Failed to fetch balances');
@@ -166,81 +186,107 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Also store decimals keyed as 'decimals:{principal}' so getBalance can divide correctly
       const decimalsMap: Record<string, string> = {};
 
-      // Fetch decimals for unknown tokens in parallel
+      // Well-known decimals — never need a network call
+      const knownDecimals: Record<string, number> = {
+        'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex': 8,
+        'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token': 8,
+        'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx': 6,
+        'SP3Y2ZSH8P7D50B0JLZVGKMBC7PX3RVRGWJKWKY38.token-aeusdc': 6,
+      };
+
+      // Fetch decimals only for tokens not already in the persistent cache
       const ftKeys = Object.keys(fungibleTokens);
+      const newDecimalsToCache: Record<string, string> = {};
+
       await Promise.all(ftKeys.map(async (key) => {
         const principal = key.split('::')[0];
         const rawBalance = (fungibleTokens[key] as any).balance || '0';
         dynamicBalances[principal] = rawBalance;
 
-        // Try to get decimals from Hiro metadata for tokens we don't know
-        const knownDecimals: Record<string, number> = {
-          'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex': 8,
-          'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token': 8,
-          'SP120SBRBQJ00MCWS7TM5R8WJNTTKD5K0HFRC2CNE.usdcx': 6,
-          'SP3Y2ZSH8P7D50B0JLZVGKMBC7PX3RVRGWJKWKY38.token-aeusdc': 6,
-        };
+        // 1. Well-known hardcoded decimals
         if (knownDecimals[principal] !== undefined) {
           decimalsMap[`decimals:${principal}`] = String(knownDecimals[principal]);
-        } else {
-          try {
-            const [addr, name] = principal.split('.');
-            // Use extended/v1 token metadata which is more reliable for SIP-010 tokens
-            const metaRes = await fetch(
-              `https://api.mainnet.hiro.so/metadata/v1/ft/${addr}.${name}`,
-              { signal: AbortSignal.timeout(5000) }
-            );
-            if (metaRes.ok) {
-              const meta = await metaRes.json();
-              if (meta.decimals !== undefined) {
-                decimalsMap[`decimals:${principal}`] = String(meta.decimals);
-              } else {
-                // Hiro metadata has no decimals — call on-chain get-decimals
-                try {
-                  const onChainRes = await fetch(
-                    `https://api.mainnet.hiro.so/v2/contracts/call-read/${addr}/${name}/get-decimals`,
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ sender: addr, arguments: [] }),
-                      signal: AbortSignal.timeout(5000),
-                    }
-                  );
-                  if (onChainRes.ok) {
-                    const onChainData = await onChainRes.json();
-                    // Result format: 0x07 (ok) + 01 (uint) + 16 bytes big-endian
-                    // e.g. "0x070100000000000000000000000000000000" = (ok u0)
-                    const result: string = onChainData?.result ?? '';
-                    // Strip 0x07 (ok) + 01 (uint) prefix = first 6 chars after 0x
-                    const hex = result.replace(/^0x0701/, '').replace(/^0x/, '');
-                    const onChainDecimals = hex ? parseInt(hex, 16) : 6;
-                    decimalsMap[`decimals:${principal}`] = String(isNaN(onChainDecimals) ? 6 : onChainDecimals);
-                  } else {
-                    decimalsMap[`decimals:${principal}`] = '6';
-                  }
-                } catch {
-                  decimalsMap[`decimals:${principal}`] = '6';
-                }
-              }
-              if (meta.name) decimalsMap[`name:${principal}`] = meta.name;
-              if (meta.symbol) decimalsMap[`symbol:${principal}`] = meta.symbol;
+          return;
+        }
+
+        // 2. Persistent localStorage cache — skip the network entirely
+        const cacheKey = `decimals:${principal}`;
+        if (decimalsCache[cacheKey] !== undefined) {
+          decimalsMap[cacheKey] = decimalsCache[cacheKey];
+          if (decimalsCache[`name:${principal}`]) decimalsMap[`name:${principal}`] = decimalsCache[`name:${principal}`];
+          if (decimalsCache[`symbol:${principal}`]) decimalsMap[`symbol:${principal}`] = decimalsCache[`symbol:${principal}`];
+          return;
+        }
+
+        // 3. Network fetch (only for tokens we've never seen before)
+        try {
+          const [addr, name] = principal.split('.');
+          // Use Hiro metadata endpoint via proxy — avoids CORS + uses API key
+          const metaRes = await fetch(
+            `${HIRO_PROXY}/metadata/v1/ft/${addr}.${name}`,
+            { signal: AbortSignal.timeout(5000) }
+          );
+          if (metaRes.ok) {
+            const meta = await metaRes.json();
+            if (meta.decimals !== undefined) {
+              decimalsMap[`decimals:${principal}`] = String(meta.decimals);
+              newDecimalsToCache[`decimals:${principal}`] = String(meta.decimals);
             } else {
-              // Metadata endpoint failed — store defaults so token still appears
-              decimalsMap[`decimals:${principal}`] = '6';
-              // Derive a readable symbol from the contract name
-              const contractName = name.replace(/-v\d+.*$/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-              decimalsMap[`symbol:${principal}`] = name.split('-')[0].toUpperCase();
-              decimalsMap[`name:${principal}`] = contractName;
+              // Metadata has no decimals — call on-chain get-decimals via proxy
+              try {
+                const onChainRes = await fetch(
+                  `${HIRO_PROXY}/v2/contracts/call-read/${addr}/${name}/get-decimals`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sender: addr, arguments: [] }),
+                    signal: AbortSignal.timeout(5000),
+                  }
+                );
+                if (onChainRes.ok) {
+                  const onChainData = await onChainRes.json();
+                  // Result format: 0x07 (ok) + 01 (uint) + 16 bytes big-endian
+                  const result: string = onChainData?.result ?? '';
+                  const hex = result.replace(/^0x0701/, '').replace(/^0x/, '');
+                  const onChainDecimals = hex ? parseInt(hex, 16) : 6;
+                  const d = String(isNaN(onChainDecimals) ? 6 : onChainDecimals);
+                  decimalsMap[`decimals:${principal}`] = d;
+                  newDecimalsToCache[`decimals:${principal}`] = d;
+                } else {
+                  decimalsMap[`decimals:${principal}`] = '6';
+                  newDecimalsToCache[`decimals:${principal}`] = '6';
+                }
+              } catch {
+                decimalsMap[`decimals:${principal}`] = '6';
+                newDecimalsToCache[`decimals:${principal}`] = '6';
+              }
             }
-          } catch {
-            // Network error — store defaults so token still appears
+            if (meta.name) { decimalsMap[`name:${principal}`] = meta.name; newDecimalsToCache[`name:${principal}`] = meta.name; }
+            if (meta.symbol) { decimalsMap[`symbol:${principal}`] = meta.symbol; newDecimalsToCache[`symbol:${principal}`] = meta.symbol; }
+          } else {
+            // Metadata endpoint failed — store defaults
+            const contractName = name.replace(/-v\d+.*$/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             decimalsMap[`decimals:${principal}`] = '6';
-            const [, name] = principal.split('.');
             decimalsMap[`symbol:${principal}`] = name.split('-')[0].toUpperCase();
-            decimalsMap[`name:${principal}`] = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            decimalsMap[`name:${principal}`] = contractName;
+            newDecimalsToCache[`decimals:${principal}`] = '6';
+            newDecimalsToCache[`symbol:${principal}`] = decimalsMap[`symbol:${principal}`];
+            newDecimalsToCache[`name:${principal}`] = contractName;
           }
+        } catch {
+          // Network error — store defaults
+          decimalsMap[`decimals:${principal}`] = '6';
+          const [, name] = principal.split('.');
+          decimalsMap[`symbol:${principal}`] = name.split('-')[0].toUpperCase();
+          decimalsMap[`name:${principal}`] = name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          newDecimalsToCache[`decimals:${principal}`] = '6';
         }
       }));
+
+      // Persist any newly discovered decimals
+      if (Object.keys(newDecimalsToCache).length > 0) {
+        saveDecimalsCache(newDecimalsToCache);
+      }
 
       setState(prev => ({
         ...prev,

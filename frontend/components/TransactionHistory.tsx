@@ -90,7 +90,7 @@ export function TransactionHistory() {
 
       if (stacksAddress) {
         const res = await fetch(
-          `https://api.mainnet.hiro.so/extended/v1/address/${stacksAddress}/transactions?limit=30`
+          `/api/hiro/extended/v1/address/${stacksAddress}/transactions?limit=30`
         );
         const data = await res.json();
         if (data.results) {

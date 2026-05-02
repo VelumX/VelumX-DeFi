@@ -302,7 +302,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
         // Verify the contract actually exists on mainnet before calling getSwapParams.
         const abiCheck = await fetch(
-          `https://api.mainnet.hiro.so/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
+          `/api/hiro/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
         );
         if (!abiCheck.ok) {
           throw new Error(
@@ -800,7 +800,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // Fetch current nonce
   let nonce = 0n;
   try {
-    const nonceRes = await fetch(`https://api.mainnet.hiro.so/v2/accounts/${userAddress}?proof=0`);
+    const nonceRes = await fetch(`/api/hiro/v2/accounts/${userAddress}?proof=0`);
     if (nonceRes.ok) {
       const accountData = await nonceRes.json();
       nonce = BigInt(accountData.nonce ?? 0);
