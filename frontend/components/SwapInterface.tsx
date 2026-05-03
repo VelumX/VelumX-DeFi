@@ -245,7 +245,9 @@ export function SwapInterface() {
 
   // ── Routable output tokens ────────────────────────────────────────────────
   // Set of tokenIds reachable from the current input token — used to filter
-  // the output token dropdown. Updated whenever the input token changes.
+  // ── Routable output tokens ────────────────────────────────────────────────
+  // Union of Bitflow routes AND ALEX-supported tokens reachable from the
+  // current input token. Updated whenever the input token changes.
   const [routableTokenIds, setRoutableTokenIds] = React.useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -254,11 +256,18 @@ export function SwapInterface() {
       token.tokenId || tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase())?.tokenId || token.address;
     const tokenInId = getTokenId(state.inputToken);
 
-    // Sync from cache immediately (instant if already loaded)
+    // Helper: merge a new set into the current routable set
+    const merge = (extra: Set<string>) =>
+      setRoutableTokenIds(prev => {
+        if (extra.size === 0) return prev;
+        const merged = new Set([...prev, ...extra]);
+        return merged.size === prev.size ? prev : merged;
+      });
+
+    // 1. Bitflow — sync from cache immediately, then poll for completion
     const cached = getRoutableTokenIds(tokenInId);
     if (cached.size > 0) setRoutableTokenIds(cached);
 
-    // Also subscribe to the background fetch completing
     let cancelled = false;
     const poll = setInterval(() => {
       const fresh = getRoutableTokenIds(tokenInId);
@@ -267,11 +276,65 @@ export function SwapInterface() {
         clearInterval(poll);
       }
     }, 500);
-    // Stop polling after 30s max
     const timeout = setTimeout(() => clearInterval(poll), 30_000);
+
+    // 2. ALEX — fetch supported tokens async and add them to the set
+    // We map each ALEX token back to the tokenId used in the Bitflow token store
+    // so the dropdown filter works correctly.
+    const alexInputAddress = state.inputToken.address;
+    import('alex-sdk').then(({ AlexSDK }) => {
+      if (cancelled) return;
+      const alex = new AlexSDK();
+      alex.fetchSwappableCurrency().then((alexTokens) => {
+        if (cancelled) return;
+        // Find the ALEX ID for the input token
+        const inputAlexId = alexTokens.find((t: any) => {
+          const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : '';
+          return (
+            contractAddr?.toLowerCase() === alexInputAddress?.toLowerCase() ||
+            t.id?.toLowerCase() === alexInputAddress?.toLowerCase() ||
+            (alexInputAddress === 'STX' && t.id === 'token-wstx')
+          );
+        })?.id;
+
+        if (!inputAlexId) return; // input token not on ALEX
+
+        // Get all tokens reachable from this input on ALEX
+        alex.getAllPossibleRoutes(inputAlexId as any, '' as any)
+          .catch(() => alexTokens) // fallback: all ALEX tokens are potentially reachable
+          .then(() => {
+            // Add all ALEX token IDs to the routable set, mapped to the
+            // tokenId/address used in the Bitflow token store
+            const alexIds = new Set<string>();
+            for (const alexTok of alexTokens) {
+              // Skip the input token itself
+              if (alexTok.id === inputAlexId) continue;
+              // Find the matching token in our store by wrapToken contract address
+              const contractAddr = (alexTok as any).wrapToken
+                ? (alexTok as any).wrapToken.split('::')[0]
+                : '';
+              const storeToken = tokens.find(t =>
+                t.address?.toLowerCase() === contractAddr?.toLowerCase() ||
+                t.tokenId === alexTok.id
+              );
+              if (storeToken) {
+                // Add both the tokenId and address so the filter catches it
+                if (storeToken.tokenId) alexIds.add(storeToken.tokenId);
+                if (storeToken.address) alexIds.add(storeToken.address);
+              } else {
+                // Token not in Bitflow store — add the ALEX ID directly
+                // so it shows up if the token store later includes it
+                alexIds.add(alexTok.id);
+              }
+            }
+            if (!cancelled) merge(alexIds);
+          });
+      }).catch(() => {}); // ALEX fetch failure is non-fatal
+    }).catch(() => {});
+
     return () => { cancelled = true; clearInterval(poll); clearTimeout(timeout); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.inputToken]);
+  }, [state.inputToken, tokens]);
 
   /**
    * Fetch the best swap quote by running Bitflow and ALEX in parallel.
