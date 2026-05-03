@@ -22,7 +22,14 @@ export function getAlexSDK(): AlexSDK {
  * Returns null if the token is not supported by ALEX.
  */
 export async function resolveAlexId(token: string): Promise<string | null> {
-  if (token === 'token-wstx' || token === 'STX') return 'token-wstx';
+  if (
+    token === 'token-wstx' ||
+    token === 'STX' ||
+    token === 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx' ||
+    token === 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx-v2' ||
+    token === 'SP3K8BC0PPEVCV7NZ6QSRWPQ2JE9E5B6N3PA0KBR9.token-wstx'
+  ) return 'token-wstx';
+
   if (!token.includes('.') && !token.startsWith('SP') && !token.startsWith('ST')) return token;
 
   try {

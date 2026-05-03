@@ -31,19 +31,27 @@ const ALEX_PAYMASTER_NAME    = 'simple-paymaster-v3';
  * additional match on underlyingToken (strips ::assetName suffix).
  */
 async function resolveAlexId(token: string, alex: AlexSDK): Promise<string | null> {
-  if (token === 'token-wstx' || token === 'STX') return 'token-wstx';
+  // STX appears under multiple contract addresses across ALEX versions —
+  // handle all known variants explicitly.
+  if (
+    token === 'token-wstx' ||
+    token === 'STX' ||
+    token === 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx' ||
+    token === 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx-v2' ||
+    token === 'SP3K8BC0PPEVCV7NZ6QSRWPQ2JE9E5B6N3PA0KBR9.token-wstx'
+  ) return 'token-wstx';
+
   // Already a bare ALEX token ID (no dot, no SP/ST prefix)
   if (!token.includes('.') && !token.startsWith('SP') && !token.startsWith('ST')) return token;
 
   try {
     const allTokens = await alex.fetchSwappableCurrency();
-    // Normalise a contract string by stripping the ::assetName suffix
     const stripAsset = (s: string) => s?.split('::')[0] ?? '';
+    const tokenLower = token.toLowerCase();
 
     const match = allTokens.find((t: any) => {
       const wrapContract       = stripAsset(t.wrapToken ?? '');
       const underlyingContract = stripAsset(t.underlyingToken ?? '');
-      const tokenLower         = token.toLowerCase();
       return (
         wrapContract.toLowerCase()       === tokenLower ||
         underlyingContract.toLowerCase() === tokenLower ||
@@ -92,17 +100,22 @@ export async function getAlexQuote(
   if (!alexTokenIn || !alexTokenOut) return null;
 
   try {
-    // Convert to ALEX 1e8 units
-    const amountInRaw = BigInt(Math.floor(amountIn * Math.pow(10, tokenInDecimals)));
-    // ALEX always works in 1e8 internally — convert from token decimals to 1e8
+    // ALEX always works in 1e8 internally
     const alexAmountIn = BigInt(Math.floor(amountIn * 1e8));
 
-    // Get output amount
-    const amountOutRaw = await alex.getAmountTo(
-      alexTokenIn as any,
-      alexAmountIn,
-      alexTokenOut as any,
-    );
+    // Get output amount — some pairs only work in one direction via getAmountTo,
+    // so we catch and return null rather than throwing up to the caller.
+    let amountOutRaw: bigint;
+    try {
+      amountOutRaw = await alex.getAmountTo(
+        alexTokenIn as any,
+        alexAmountIn,
+        alexTokenOut as any,
+      );
+    } catch {
+      // getAmountTo failed (e.g. "No AMM pool found") — pair not supported
+      return null;
+    }
 
     if (!amountOutRaw || amountOutRaw <= 0n) return null;
 
@@ -111,13 +124,19 @@ export async function getAlexQuote(
 
     // Pre-build the swap tx (reused at execution time — avoids double SDK call)
     // Use 0 as minDy for the quote — execution will apply slippage
-    const swapTx = await alex.runSwap(
-      userAddress,
-      alexTokenIn as any,
-      alexTokenOut as any,
-      alexAmountIn,
-      0n, // min-dy: 0 for quote only
-    );
+    let swapTx: Awaited<ReturnType<AlexSDK['runSwap']>>;
+    try {
+      swapTx = await alex.runSwap(
+        userAddress,
+        alexTokenIn as any,
+        alexTokenOut as any,
+        alexAmountIn,
+        0n,
+      );
+    } catch {
+      // runSwap failed — pair not routable via ALEX
+      return null;
+    }
 
     return { amountOut, amountOutRaw, alexTokenIn, alexTokenOut, swapTx };
   } catch (err) {
