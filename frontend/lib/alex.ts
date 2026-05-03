@@ -23,17 +23,21 @@ export function getAlexSDK(): AlexSDK {
  */
 export async function resolveAlexId(token: string): Promise<string | null> {
   if (token === 'token-wstx' || token === 'STX') return 'token-wstx';
-  // If it's already a bare token ID (no dot, no SP/ST prefix), pass through
   if (!token.includes('.') && !token.startsWith('SP') && !token.startsWith('ST')) return token;
 
   try {
     const alex = getAlexSDK();
     const allTokens = await alex.fetchSwappableCurrency();
+    const stripAsset = (s: string) => s?.split('::')[0] ?? '';
+    const tokenLower = token.toLowerCase();
+
     const match = allTokens.find((t: any) => {
-      const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : '';
+      const wrapContract       = stripAsset(t.wrapToken ?? '');
+      const underlyingContract = stripAsset(t.underlyingToken ?? '');
       return (
-        contractAddr?.toLowerCase() === token?.toLowerCase() ||
-        t.id?.toLowerCase() === token?.toLowerCase()
+        wrapContract.toLowerCase()       === tokenLower ||
+        underlyingContract.toLowerCase() === tokenLower ||
+        t.id?.toLowerCase()              === tokenLower
       );
     });
     return match ? match.id : null;

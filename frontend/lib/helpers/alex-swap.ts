@@ -27,18 +27,27 @@ const ALEX_PAYMASTER_NAME    = 'simple-paymaster-v3';
 /**
  * Resolve a contract principal or token ID to an ALEX token ID string.
  * Returns null if the token is not supported by ALEX.
- * Mirrors the resolveAlexId logic in simple-gasless-swap.ts.
+ * Mirrors the resolveAlexId logic in simple-gasless-swap.ts, with an
+ * additional match on underlyingToken (strips ::assetName suffix).
  */
 async function resolveAlexId(token: string, alex: AlexSDK): Promise<string | null> {
   if (token === 'token-wstx' || token === 'STX') return 'token-wstx';
+  // Already a bare ALEX token ID (no dot, no SP/ST prefix)
   if (!token.includes('.') && !token.startsWith('SP') && !token.startsWith('ST')) return token;
+
   try {
     const allTokens = await alex.fetchSwappableCurrency();
+    // Normalise a contract string by stripping the ::assetName suffix
+    const stripAsset = (s: string) => s?.split('::')[0] ?? '';
+
     const match = allTokens.find((t: any) => {
-      const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : '';
+      const wrapContract       = stripAsset(t.wrapToken ?? '');
+      const underlyingContract = stripAsset(t.underlyingToken ?? '');
+      const tokenLower         = token.toLowerCase();
       return (
-        contractAddr?.toLowerCase() === token?.toLowerCase() ||
-        t.id?.toLowerCase() === token?.toLowerCase()
+        wrapContract.toLowerCase()       === tokenLower ||
+        underlyingContract.toLowerCase() === tokenLower ||
+        t.id?.toLowerCase()              === tokenLower
       );
     });
     return match ? match.id : null;

@@ -289,10 +289,14 @@ export function SwapInterface() {
         if (cancelled) return;
         // Find the ALEX ID for the input token
         const inputAlexId = alexTokens.find((t: any) => {
-          const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : '';
+          const stripAsset = (s: string) => s?.split('::')[0] ?? '';
+          const wrapContract       = stripAsset(t.wrapToken ?? '');
+          const underlyingContract = stripAsset(t.underlyingToken ?? '');
+          const addrLower = alexInputAddress?.toLowerCase();
           return (
-            contractAddr?.toLowerCase() === alexInputAddress?.toLowerCase() ||
-            t.id?.toLowerCase() === alexInputAddress?.toLowerCase() ||
+            wrapContract.toLowerCase()       === addrLower ||
+            underlyingContract.toLowerCase() === addrLower ||
+            t.id?.toLowerCase()              === addrLower ||
             (alexInputAddress === 'STX' && t.id === 'token-wstx')
           );
         })?.id;
@@ -313,10 +317,16 @@ export function SwapInterface() {
               const contractAddr = (alexTok as any).wrapToken
                 ? (alexTok as any).wrapToken.split('::')[0]
                 : '';
-              const storeToken = tokens.find(t =>
-                t.address?.toLowerCase() === contractAddr?.toLowerCase() ||
-                t.tokenId === alexTok.id
-              );
+              const storeToken = tokens.find(t => {
+                const stripAsset = (s: string) => s?.split('::')[0] ?? '';
+                const wrapContract       = stripAsset((alexTok as any).wrapToken ?? '');
+                const underlyingContract = stripAsset((alexTok as any).underlyingToken ?? '');
+                return (
+                  t.address?.toLowerCase() === wrapContract.toLowerCase() ||
+                  t.address?.toLowerCase() === underlyingContract.toLowerCase() ||
+                  t.tokenId === alexTok.id
+                );
+              });
               if (storeToken) {
                 // Add both the tokenId and address so the filter catches it
                 if (storeToken.tokenId) alexIds.add(storeToken.tokenId);
