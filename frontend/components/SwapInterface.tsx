@@ -15,6 +15,8 @@ import { getVelumXClient } from '@/lib/velumx';
 import { type QuoteResult } from '@bitflowlabs/core-sdk';
 import { getBitflowSDK } from '@/lib/bitflow';
 import { getParallelQuote, getRoutableTokenIds } from '@/lib/helpers/bitflow-parallel-quote';
+import { getAlexQuote } from '@/lib/helpers/alex-swap';
+import { isAlexPair } from '@/lib/alex';
 import { useTokenStore } from '@/lib/hooks/useTokenStore';
 import { TokenInput } from './ui/TokenInput';
 import { SettingsPanel } from './ui/SettingsPanel';
@@ -49,7 +51,7 @@ interface SwapState {
   inputAmount: string;
   outputAmount: string;
   gaslessMode: boolean;
-  selectedGasToken: Token | null; // New: Universal Gas Token
+  selectedGasToken: Token | null;
   isProcessing: boolean;
   isFetchingQuote: boolean;
   error: string | null;
@@ -60,6 +62,8 @@ interface SwapState {
   showSettings: boolean;
   isRegistering: boolean;
   feeEstimate: any | null;
+  /** ALEX quote when ALEX wins the best-route race; null when Bitflow wins */
+  alexQuote: import('@/lib/helpers/alex-swap').AlexQuoteResult | null;
 }
 
 // Maps known token symbols/IDs (as stored in developer dashboard) to their
@@ -213,6 +217,7 @@ export function SwapInterface() {
     showSettings: false,
     isRegistering: false,
     feeEstimate: null,
+    alexQuote: null,
   });
 
   // Auto-select default tokens once the shared store has tokens
@@ -269,90 +274,102 @@ export function SwapInterface() {
   }, [state.inputToken]);
 
   /**
-   * Fetch a swap quote from Bitflow with:
-   *   • 20-second timeout — prevents the UI from hanging on slow / dead APIs
-   *   • Generation counter — discards stale responses that arrive after a
-   *     newer request has already been fired
-   *   • Single retry — automatically retries once on transient failures
+   * Fetch the best swap quote by running Bitflow and ALEX in parallel.
+   * Whichever gives a higher output amount wins — no user toggle needed.
+   * ALEX is only attempted when the token pair is supported by ALEX.
    */
   const fetchQuote = useCallback(async (retryCount = 0) => {
     if (!state.inputToken || !state.outputToken || !state.inputAmount) return;
 
-    // Bump generation so stale responses are ignored
     const generation = ++quoteGenRef.current;
-
     setState(prev => ({ ...prev, isFetchingQuote: true, error: null }));
 
     try {
-      // Helper to find tokenId from the discovered tokens list if missing
       const getTokenId = (token: Token) => {
         if (token.tokenId) return token.tokenId;
-        // Fallback: look up in discovered tokens by address
         const match = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
         return match?.tokenId || token.address;
       };
 
-      const tokenInId = getTokenId(state.inputToken);
+      const tokenInId  = getTokenId(state.inputToken);
       const tokenOutId = getTokenId(state.outputToken);
-      const amountIn = parseFloat(state.inputAmount);
+      const amountIn   = parseFloat(state.inputAmount);
 
-      console.log(`[Swap] Requesting Quote (gen ${generation}): ${state.inputToken.symbol} (${tokenInId}) -> ${state.outputToken.symbol} (${tokenOutId}) | Amount: ${amountIn}`);
+      // Run both quotes in parallel — ALEX only if the pair is supported
+      const alexSupported = isAlexPair(state.inputToken.address, state.outputToken.address);
 
-      const quoteResult: QuoteResult = await getParallelQuote(tokenInId, tokenOutId, amountIn);
+      const [bitflowResult, alexResult] = await Promise.all([
+        getParallelQuote(tokenInId, tokenOutId, amountIn).catch(() => null),
+        alexSupported
+          ? getAlexQuote(
+              state.inputToken.address,
+              state.outputToken.address,
+              amountIn,
+              state.inputToken.decimals,
+              state.outputToken.decimals,
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
 
-      // If a newer request was fired while we were waiting, discard this result
-      if (generation !== quoteGenRef.current) {
-        console.log(`[Swap] Discarding stale quote (gen ${generation})`);
-        return;
+      if (generation !== quoteGenRef.current) return; // stale — newer request fired
+
+      const bitflowBest = bitflowResult?.bestRoute?.quote ?? 0;
+      const alexBest    = alexResult?.amountOut ?? 0;
+
+      // Pick the winner
+      const alexWins = alexBest > 0 && alexBest > bitflowBest;
+
+      if (alexWins && alexResult) {
+        // ALEX gives a better rate
+        const outputAmount = alexResult.amountOut.toFixed(6);
+        setState(prev => ({
+          ...prev,
+          outputAmount,
+          alexQuote: alexResult,
+          quote: {
+            amountOut: outputAmount,
+            priceImpact: '—',
+            fee: '0.3%',
+            rate: (alexResult.amountOut / amountIn).toFixed(6),
+            bestRoute: null,   // signals "ALEX won" to handleSwap
+            allRoutes: [],
+          },
+          isFetchingQuote: false,
+        }));
+      } else if (bitflowBest > 0 && bitflowResult?.bestRoute) {
+        // Bitflow wins (or ALEX not supported / no result)
+        const bestRoute = bitflowResult.bestRoute;
+        const outputAmount = bestRoute.quote!.toFixed(6);
+        setState(prev => ({
+          ...prev,
+          outputAmount,
+          alexQuote: null,
+          quote: {
+            amountOut: outputAmount,
+            priceImpact: '0.30',
+            fee: '0.3%',
+            rate: (bestRoute.quote! / amountIn).toFixed(6),
+            bestRoute,
+            allRoutes: bitflowResult.allRoutes?.filter(r => r.quote !== null) || [],
+          },
+          isFetchingQuote: false,
+        }));
+      } else {
+        throw new Error(
+          `No liquidity found for ${state.inputToken.symbol} → ${state.outputToken.symbol}.`
+        );
       }
-
-      console.log('[Swap] Bitflow Quote Result:', JSON.stringify({
-        hasBestRoute: !!quoteResult?.bestRoute,
-        allRoutesCount: quoteResult?.allRoutes?.length,
-        bestRouteQuote: quoteResult?.bestRoute?.quote
-      }, null, 2));
-
-      const bestRoute = quoteResult.bestRoute;
-
-      if (!bestRoute || !bestRoute.quote) {
-        console.warn(`[Swap] No route found for ${tokenInId} -> ${tokenOutId}`);
-        throw new Error(`No liquidity found for ${state.inputToken.symbol} to ${state.outputToken.symbol} on Bitflow`);
-      }
-
-      console.log(`[Swap] Success (gen ${generation}): ${bestRoute.quote} units`);
-
-      const outputAmountFormatted = bestRoute.quote.toFixed(6);
-      const rate = (bestRoute.quote / amountIn).toFixed(6);
-
-      setState(prev => ({
-        ...prev,
-        outputAmount: outputAmountFormatted,
-        quote: {
-          amountOut: outputAmountFormatted,
-          priceImpact: '0.30', // Placeholder
-          fee: '0.3%',
-          rate,
-          bestRoute, // Store the actual route object for execution
-          allRoutes: quoteResult.allRoutes?.filter(r => r.quote !== null) || [],
-        },
-        isFetchingQuote: false,
-      }));
     } catch (error: any) {
-      // Ignore stale errors
       if (generation !== quoteGenRef.current) return;
-
-      // Retry once on transient failures (timeout, network blip)
       if (retryCount < 1) {
-        console.warn(`[Swap] Quote failed (gen ${generation}), retrying...`, error?.message);
+        console.warn('[Swap] Quote failed, retrying...', error?.message);
         return fetchQuote(retryCount + 1);
       }
-
-      console.error('Failed to fetch quote via Bitflow SDK:', error);
       setState(prev => ({
         ...prev,
         error: error?.message?.includes('timed out')
           ? 'Quote request timed out. Please try again.'
-          : 'No liquidity pool found for this pair on Bitflow.',
+          : (error?.message || 'No liquidity pool found for this pair.'),
         isFetchingQuote: false,
       }));
     }
@@ -391,7 +408,7 @@ export function SwapInterface() {
         clearTimeout(timer);
       };
     } else {
-      setState(prev => ({ ...prev, outputAmount: '', quote: null }));
+      setState(prev => ({ ...prev, outputAmount: '', quote: null, alexQuote: null }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.inputToken, state.outputToken, state.inputAmount]);
@@ -446,6 +463,57 @@ export function SwapInterface() {
 
     try {
       const useGasless = state.gaslessMode;
+
+      // ── Determine which DEX to execute on ──────────────────────────────────
+      // If the active quote came from ALEX (alexQuote is set and bestRoute is null),
+      // use the ALEX paymaster. Otherwise use the existing Bitflow path.
+      const useAlex = !!state.alexQuote && !state.quote?.bestRoute;
+
+      if (useAlex) {
+        // ── ALEX gasless swap via simple-paymaster-v3 ─────────────────────────
+        const { executeAlexGaslessSwap } = await import('@/lib/helpers/alex-swap');
+
+        const txid = await executeAlexGaslessSwap({
+          userAddress: stacksAddress,
+          tokenInAddress: state.inputToken.address,
+          tokenOutAddress: state.outputToken.address,
+          amountIn: parseFloat(state.inputAmount),
+          tokenInDecimals: state.inputToken.decimals,
+          tokenOutDecimals: state.outputToken.decimals,
+          feeToken: state.selectedGasToken?.address || '',
+          slippage: state.slippage / 100,
+          quote: state.alexQuote ?? undefined,
+          feeEstimate: state.feeEstimate,
+          onProgress: (step) => setState(prev => ({ ...prev, success: step })),
+        });
+
+        setState(prev => ({
+          ...prev,
+          isProcessing: false,
+          success: `ALEX swap submitted! TX: ${txid}. Waiting for confirmation...`,
+          inputAmount: '',
+          outputAmount: '',
+          quote: null,
+          alexQuote: null,
+        }));
+
+        if (fetchBalances && stacksAddress) {
+          const inputToken = state.inputToken;
+          const prevBal = getBalance(inputToken);
+          let attempts = 0;
+          const poll = async () => {
+            attempts++;
+            await fetchBalances();
+            if (getBalance(inputToken) !== prevBal) {
+              setState(prev => ({ ...prev, success: `ALEX swap confirmed! TX: ${txid}` }));
+              return;
+            }
+            if (attempts < 60) setTimeout(poll, 15000);
+          };
+          setTimeout(poll, 10000);
+        }
+        return;
+      }
 
       if (useGasless) {
         // Use VelumX SDK for gasless swaps via Bitflow
