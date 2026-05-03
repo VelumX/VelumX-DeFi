@@ -71,11 +71,9 @@ export interface AlexQuoteResult {
   amountOut: number;
   /** Raw output in ALEX 1e8 units */
   amountOutRaw: bigint;
-  /** ALEX token IDs for input and output */
+  /** ALEX token IDs for input and output — reused at execution to skip re-resolution */
   alexTokenIn: string;
   alexTokenOut: string;
-  /** The swap tx params from alex.runSwap — reused at execution time */
-  swapTx: Awaited<ReturnType<AlexSDK['runSwap']>>;
 }
 
 /**
@@ -88,7 +86,6 @@ export async function getAlexQuote(
   amountIn: number,
   tokenInDecimals: number,
   tokenOutDecimals: number,
-  userAddress: string,
 ): Promise<AlexQuoteResult | null> {
   const alex = new AlexSDK();
 
@@ -122,23 +119,7 @@ export async function getAlexQuote(
     // Convert from ALEX 1e8 to human-readable using output token decimals
     const amountOut = Number(amountOutRaw) / Math.pow(10, tokenOutDecimals);
 
-    // Pre-build the swap tx (reused at execution time — avoids double SDK call)
-    // Use 0 as minDy for the quote — execution will apply slippage
-    let swapTx: Awaited<ReturnType<AlexSDK['runSwap']>>;
-    try {
-      swapTx = await alex.runSwap(
-        userAddress,
-        alexTokenIn as any,
-        alexTokenOut as any,
-        alexAmountIn,
-        0n,
-      );
-    } catch {
-      // runSwap failed — pair not routable via ALEX
-      return null;
-    }
-
-    return { amountOut, amountOutRaw, alexTokenIn, alexTokenOut, swapTx };
+    return { amountOut, amountOutRaw, alexTokenIn, alexTokenOut };
   } catch (err) {
     console.warn('[ALEX] Quote failed:', err);
     return null;
@@ -215,8 +196,9 @@ export async function executeAlexGaslessSwap(
     minDy = BigInt(Math.floor(Number(params.quote.amountOutRaw) * (1 - slippage)));
   }
 
-  // Get swap params from ALEX SDK (same as simple-gasless-swap.ts)
-  const swapTx = params.quote?.swapTx ?? await alex.runSwap(
+  // Always call runSwap fresh at execution time with the correct minDy.
+  // Never reuse the quote's swapTx — it was built with minDy=0 and stale amounts.
+  const swapTx = await alex.runSwap(
     userAddress,
     alexTokenIn as any,
     alexTokenOut as any,

@@ -380,7 +380,6 @@ export function SwapInterface() {
               amountIn,
               state.inputToken.decimals,
               state.outputToken.decimals,
-              stacksAddress,
             ).catch(() => null)
           : Promise.resolve(null),
       ]);
