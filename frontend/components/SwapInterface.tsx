@@ -81,6 +81,17 @@ const KNOWN_TOKEN_CONTRACTS: Record<string, string> = {
   'sbtc-token':              'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token',
 };
 
+// ALEX paymaster only accepts tokens that implement SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.trait-sip-010.
+// These are the tokens from ALEX's own ecosystem that implement that specific trait.
+const ALEX_COMPATIBLE_GAS_TOKENS = new Set([
+  'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex',   // ALEX
+  'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx',   // wSTX
+  'SP3NE50GEXFG9SZGTT51P40X2CKYSZ5CC4ZTZ7A2G.welshcorgicoin-token', // WELSH
+  'SP2XD7417HGPRTREMKF748VNEQPDRR0RMANB7X1NK.token-susdt',  // aUSD
+]);
+
+const ALEX_DEFAULT_GAS_TOKEN_ADDRESS = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex';
+
 /**
  * Resolves a token identifier (symbol, ALEX ID, or contract principal) to
  * a full Stacks contract principal. Returns the input unchanged if it already
@@ -487,6 +498,21 @@ export function SwapInterface() {
   }, [state.inputToken, state.outputToken, state.inputAmount]);
 
 
+
+  // When ALEX wins the quote race, auto-switch the gas token to an ALEX-compatible
+  // one if the current gas token doesn't implement ALEX's SIP-010 trait.
+  useEffect(() => {
+    if (!state.alexQuote) return; // Bitflow won — no change needed
+    const currentGasAddr = state.selectedGasToken?.address ?? '';
+    if (ALEX_COMPATIBLE_GAS_TOKENS.has(currentGasAddr)) return; // already compatible
+
+    // Switch to ALEX token as the default gas token for ALEX swaps
+    const alexToken = tokens.find(t => t.address === ALEX_DEFAULT_GAS_TOKEN_ADDRESS);
+    if (alexToken) {
+      setState(prev => ({ ...prev, selectedGasToken: alexToken }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.alexQuote, tokens]);
 
   // Separate effect for fee estimate — doesn't block or delay quotes
   useEffect(() => {
@@ -949,7 +975,12 @@ export function SwapInterface() {
                        >
                          {tokens
                            .filter(t => t.symbol !== 'STX')
-                           .filter(t => supportedGasTokens.length === 0 || supportedGasTokens.map(resolveTokenAddress).includes(t.address))
+                           .filter(t => {
+                             // When ALEX won the quote, only show tokens compatible with ALEX's SIP-010 trait
+                             if (state.alexQuote) return ALEX_COMPATIBLE_GAS_TOKENS.has(t.address);
+                             // Bitflow: use relayer's supported gas tokens list
+                             return supportedGasTokens.length === 0 || supportedGasTokens.map(resolveTokenAddress).includes(t.address);
+                           })
                            .map(t => (
                            <button
                               key={t.symbol}
