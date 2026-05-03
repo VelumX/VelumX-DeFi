@@ -9,21 +9,22 @@ import React from 'react';
 import {
     ArrowLeftRight,
     Repeat,
-    Droplets,
     TrendingUp,
     History,
     Sun,
     Moon,
     Github,
     Twitter,
-    ExternalLink,
-    Layers
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 
+// Full dual-wallet button (Ethereum + Stacks) — used on Bridge
 const WalletButton = dynamic(() => import('./WalletButton').then(mod => mod.WalletButton), { ssr: false });
+
+// Stacks-only wallet button — used on Swap, Earn, History
+const StacksWalletButton = dynamic(() => import('./StacksWalletButton').then(mod => mod.StacksWalletButton), { ssr: false });
 
 interface SidebarProps {
     isDarkMode: boolean;
@@ -34,6 +35,9 @@ interface SidebarProps {
 
 export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }: SidebarProps) {
     const pathname = usePathname();
+
+    // Bridge requires both Ethereum + Stacks wallets; all other pages only need Stacks
+    const isBridgePage = pathname === '/bridge';
 
     const menuItems = [
         { id: 'bridge', label: 'Bridge', icon: ArrowLeftRight, href: '/bridge' },
@@ -100,9 +104,9 @@ export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }:
 
             {/* Footer Area */}
             <div className="p-4 space-y-4">
-                {/* Wallet Section */}
+                {/* Wallet Section — context-aware */}
                 <div className="px-2">
-                    <WalletButton />
+                    {isBridgePage ? <WalletButton /> : <StacksWalletButton />}
                 </div>
 
                 {/* Global Controls */}
@@ -131,8 +135,6 @@ export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }:
                         </a>
                     </div>
                 </div>
-
-
 
                 {/* Version */}
                 <div className="px-4 text-center">
