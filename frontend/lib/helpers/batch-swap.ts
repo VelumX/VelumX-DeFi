@@ -72,7 +72,6 @@ export async function getAvailableTokens(): Promise<Token[]> {
     availableTokensCache = tokens;
     return tokens;
   }).catch(e => {
-    console.warn('[sweep] getAvailableTokens failed:', e);
     availableTokensPromise = null;
     return [];
   });
@@ -193,7 +192,6 @@ export async function quoteSweep(
         dex: dexFromRoute(best),
       });
     } catch (e) {
-      console.warn('[sweep] quoteSweep failed for', t.principal, e);
       perToken.push({ principal: t.principal, stxOut: '0', dex: 'bitflow', noLiquidity: true });
     }
   }));
@@ -231,7 +229,6 @@ export async function executeSweep(params: {
       const best = result.bestRoute;
 
       if (!best || best.quote == null || best.quote <= 0) {
-        console.warn('[sweep] No route for', t.principal, '— skipping');
         continue;
       }
 
@@ -241,7 +238,7 @@ export async function executeSweep(params: {
         route: best,
       });
     } catch (e) {
-      console.warn('[sweep] getQuoteForRoute failed for', t.principal, e);
+      // skip token with no route
     }
   }
 
@@ -254,8 +251,6 @@ export async function executeSweep(params: {
     makeUint(BigInt(minStxOut)),
   ];
 
-  console.log('[sweep] Calling', SWEEP_CONTRACT, `sweep-to-stx-${enriched.length}`, 'with', enriched.length, 'tokens');
-
   onProgress?.('Waiting for wallet signature...');
 
   return new Promise((resolve, reject) => {
@@ -267,6 +262,6 @@ export async function executeSweep(params: {
       postConditionMode: 'allow',
       onFinish: (data: any) => { onProgress?.('Submitted!'); resolve(data.txid); },
       onCancel: () => reject(new Error('Cancelled by user')),
-    } as any).catch((e: any) => { console.error('[sweep] request failed:', e); reject(e); });
+    } as any).catch((e: any) => { reject(e); });
   });
 }

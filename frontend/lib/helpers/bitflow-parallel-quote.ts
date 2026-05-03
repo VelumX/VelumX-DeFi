@@ -107,16 +107,13 @@ async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
     clearTimeout(timer);
     if (res.ok) {
       const data = await res.json();
-      console.log(`[ParallelQuote] Direct API: routes fetched for ${tokenX}`);
       return data;
     }
   } catch (e: any) {
     if (e.name === 'AbortError') {
-      console.warn('[ParallelQuote] Direct API timed out, skipping proxy fallback.');
       throw e; // Don't try proxy if it's a timeout (backend is slow)
     }
     // CORS blocked — fall through to proxy
-    console.warn('[ParallelQuote] Direct API failed, trying proxy:', e.message);
   }
 
   // Fallback: use the Next.js rewrite proxy
@@ -131,7 +128,6 @@ async function fetchRoutesFromAPI(tokenX: string): Promise<any> {
     if (!res.ok) throw new Error(`Route discovery failed: ${res.status}`);
     return await res.json();
   } catch (e: any) {
-    console.warn('[ParallelQuote] Proxy API failed:', e.name === 'AbortError' ? 'timeout' : e.message);
     return {}; // Graceful degradation to empty routes instead of throwing
   }
 }
@@ -371,7 +367,6 @@ export async function getParallelQuote(
   const quoteKey = `${tokenX}:${tokenY}:${amount}`;
   const cachedQuote = _quoteCache.get(quoteKey);
   if (cachedQuote && Date.now() - cachedQuote.ts < QUOTE_CACHE_TTL_MS) {
-    console.log(`[ParallelQuote] Cache hit for ${quoteKey} (${((Date.now() - cachedQuote.ts) / 1000).toFixed(0)}s old)`);
     return cachedQuote.result;
   }
 
@@ -383,8 +378,6 @@ export async function getParallelQuote(
 
   // Get all routes — multi-layer cache (memory → localStorage → API)
   const allPossibleRoutes = await getCachedRoutes(tokenX, tokenY);
-
-  console.log(`[ParallelQuote] Route discovery: ${(performance.now() - t0).toFixed(0)}ms, ${allPossibleRoutes.length} routes`);
 
   if (allPossibleRoutes.length === 0) {
     return { bestRoute: null, allRoutes: [], inputData: { tokenX, tokenY, amountInput: amount } };
@@ -510,7 +503,6 @@ export async function getParallelQuote(
   // Flatten, sort, return
   const allRoutes: any[] = (results as PromiseSettledResult<any>[]).flatMap((r, i) => {
     if (r.status === 'fulfilled') return [r.value];
-    console.warn(`[ParallelQuote] Route ${i} failed:`, r.reason?.message);
     return [{
       route: routes[i], quote: null,
       params: routes[i].quoteData?.parameters ?? {},
@@ -523,8 +515,6 @@ export async function getParallelQuote(
 
   allRoutes.sort((a, b) => (b.quote ?? 0) - (a.quote ?? 0));
   const bestRoute = allRoutes.find(r => r.quote !== null && r.quote > 0) ?? null;
-
-  console.log(`[ParallelQuote] Total: ${(performance.now() - t0).toFixed(0)}ms, best: ${bestRoute?.quote?.toFixed(4) ?? 'none'}`);
 
   const quoteResult: QuoteResult = { bestRoute, allRoutes, inputData: { tokenX, tokenY, amountInput: amount } };
 

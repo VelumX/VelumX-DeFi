@@ -218,14 +218,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
-  console.log('[Bitflow] Selected route:', {
-    contract: (bestRoute as any).swapData?.contract,
-    fn: (bestRoute as any).swapData?.function,
-    quote: bestRoute.quote,
-    dexPath: (bestRoute as any).dexPath,
-    paymasterCompatible: paymasterRoutes.length > 0,
-  });
-
   const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
 
   // Helper: build a contractPrincipalCV from a "ADDR.name" string
@@ -298,8 +290,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           throw new Error(`Testnet contract after resolution: ${swapData.contract}`);
         }
 
-        console.log('[Bitflow] Trying route:', `${resolvedContractAddress}.${resolvedContractName}`, swapData.function);
-
         // Verify the contract actually exists on mainnet before calling getSwapParams.
         const abiCheck = await fetch(
           `/api/hiro/v2/contracts/interface/${resolvedContractAddress}/${resolvedContractName}`
@@ -331,13 +321,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           0.01 // 1% slippage
         );
 
-        console.log('[Policy] Using DEVELOPER_SPONSORS (SDK getSwapParams)', {
-          originalContract: swapData.contract,
-          resolvedContract: `${resolvedContractAddress}.${resolvedContractName}`,
-          fn: swapParams.functionName,
-          argsCount: swapParams.functionArgs.length,
-        });
-
         txOptions = {
           contractAddress: resolvedContractAddress,
           contractName: resolvedContractName,
@@ -347,7 +330,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
         break;
       } catch (routeErr: any) {
-        console.warn('[Bitflow] Route failed, trying next:', routeErr.message);
         lastError = routeErr;
         txOptions = null;
       }
@@ -478,9 +460,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       if (tokenPath.length > 0) {
         const before = tokenPath.length;
         tokenPath = tokenPath.filter((t, i) => i === 0 || t !== tokenPath[i - 1]);
-        if (tokenPath.length !== before) {
-          console.log(`[Velar] Deduped token-path: ${before} → ${tokenPath.length}`, tokenPath);
-        }
       }
 
       // Last resort: derive token path from postConditions + SDK token list.
@@ -488,17 +467,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // unresolved token IDs (no dot in any entry after normalization).
       const tokenPathHasUnresolved = tokenPath.length > 0 && tokenPath.some(e => !e.includes('.'));
       if (tokenPath.length === 0 || tokenPathHasUnresolved) {
-        console.warn('[Velar] token-path empty/unresolved, attempting derivation. Available data:', {
-          tokenInId: params.tokenInId,
-          tokenIn: params.tokenIn,
-          tokenOutId: params.tokenOutId,
-          tokenOut: params.tokenOut,
-          routeTokenPath: (bestRoute as any).route?.token_path,
-          routePostConditionKeys: Object.keys((bestRoute as any).route?.postConditions || {}),
-          routePostConditionValues: Object.values((bestRoute as any).route?.postConditions || {}).map((pc: any) => pc?.tokenContract),
-          sdkTokensCount: (bitflow as any).context?.availableTokens?.length,
-        });
-
         // Ensure SDK token list is loaded
         const sdkCtx = (bitflow as any).context;
         if (!sdkCtx?.availableTokens?.length) {
@@ -552,13 +520,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           pcContracts.filter(c => c !== resolvedTokenIn && c !== resolvedTokenOut)
         )];
 
-        console.warn('[Velar] Derivation result:', { tokenInContract, tokenOutContract, resolvedTokenIn, resolvedTokenOut, pcContracts, intermediates });
-
         if (resolvedTokenIn && resolvedTokenOut) {
           tokenPath = [resolvedTokenIn, ...intermediates, resolvedTokenOut];
           // Final dedup: remove consecutive duplicates (e.g. [A, B, B, C] → [A, B, C])
           tokenPath = tokenPath.filter((t, i) => i === 0 || t !== tokenPath[i - 1]);
-          console.log('[Velar] Derived token-path:', tokenPath);
         }
       }
 
@@ -614,10 +579,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       const expectedLen = EXPECTED_TOKENS[hopSuffix];
       let velarTokenPath = tokenPath;
       if (expectedLen && tokenPath.length > expectedLen) {
-        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Extracting last ${expectedLen} tokens for Velar portion.`);
         velarTokenPath = tokenPath.slice(-expectedLen);
-      } else if (expectedLen && tokenPath.length < expectedLen) {
-        console.warn(`[Velar] Token path has ${tokenPath.length} entries but ${functionName} expects ${expectedLen}. Path may be incomplete.`);
       }
 
       // Velar share-fee-to contract (always the same)
@@ -635,15 +597,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       // tokenPath must contain contract principals (e.g. "SP...token-welsh").
       // If still empty after all fallbacks including postConditions derivation, log and throw.
       if (tokenPath.length === 0) {
-        console.error('[Velar] token-path empty after all fallbacks. Route data:', JSON.stringify({
-          swapDataParams: routeParams,
-          quoteDataParams: quoteParams,
-          routeTokenPath: (bestRoute as any).route?.token_path,
-          topLevelTokenPath: (bestRoute as any).tokenPath,
-          postConditions: (bestRoute as any).route?.postConditions || (bestRoute as any).postConditions,
-          tokenIn: params.tokenIn,
-          tokenOut: params.tokenOut,
-        }));
         throw new Error(
           `Velar ${isVelarSS ? 'stableswap' : 'XYK'} router route (${swapData.function}) requires a token-path ` +
           `but none was found in the route data. Cannot build paymaster args safely.`
@@ -730,15 +683,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       ];
 
       txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs: baseArgs };
-      console.log(`[Policy] Using USER_PAYS (${paymasterName} Velar)`, {
-        functionName,
-        router: resolvedPool,
-        ssTokenA: finalSsTokenA,
-        ssTokenB: finalSsTokenB,
-        ssPool: finalSsPool,
-        velarTokens: finalVelarTokens,
-        argsCount: baseArgs.length,
-      });
     } else {
       // For stableswap and standard router routes, use getSwapParams to get the
       // correct SDK-built args, then determine the paymaster function name and
@@ -773,12 +717,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       ];
 
       txOptions = { contractAddress: paymasterAddr, contractName: paymasterName, functionName, functionArgs };
-      console.log('[Policy] Using USER_PAYS (velumx-defi-paymaster-v1)', {
-        functionName,
-        pool: resolvedPool,
-        sdkArgsCount: swapParams.functionArgs.length,
-        totalArgsCount: functionArgs.length,
-      });
     }
   }
 
@@ -793,7 +731,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === userAddress)
         || (addrResult?.addresses || [])[0];
       publicKey = stxEntry?.publicKey || '';
-    } catch (e) { console.warn('stx_getAddresses failed:', e); }
+    } catch (e) { /* ignore */ }
   }
   if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
 
@@ -805,7 +743,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
       const accountData = await nonceRes.json();
       nonce = BigInt(accountData.nonce ?? 0);
     }
-  } catch (e) { console.warn('Failed to fetch nonce:', e); }
+  } catch (e) { /* use 0 */ }
 
   const unsignedTx = await makeUnsignedContractCall({
     contractAddress: txOptions.contractAddress,
@@ -848,7 +786,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     network: 'mainnet',
   });
 
-  console.log('VelumX Bitflow sponsor result:', result);
   return result.txid;
 }
 

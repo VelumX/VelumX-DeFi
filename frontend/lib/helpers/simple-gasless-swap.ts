@@ -73,7 +73,7 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
                t.id?.toLowerCase() === token?.toLowerCase();
       });
       if (match) return match.id;
-    } catch (e) { console.warn('ALEX token resolution failed:', e); }
+    } catch (e) { /* ignore */ }
     throw new Error(`Token not supported by ALEX: ${token}`);
   };
 
@@ -93,7 +93,7 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
       const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === params.userAddress)
         || (addrResult?.addresses || [])[0];
       publicKey = stxEntry?.publicKey || '';
-    } catch (e) { console.warn('stx_getAddresses failed:', e); }
+    } catch (e) { /* ignore */ }
   }
   if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
 
@@ -105,7 +105,7 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
       const accountData = await nonceRes.json();
       nonce = BigInt(accountData.nonce ?? 0);
     }
-  } catch (e) { console.warn('Failed to fetch nonce:', e); }
+  } catch (e) { /* use 0 */ }
 
   // Step 6: Build the unsigned sponsored tx
   // DEVELOPER_SPONSORS: call ALEX swap directly (relayer pays STX, user pays nothing)
@@ -188,8 +188,6 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
     } else {
       throw new Error(`Unsupported ALEX swap function: ${swapTx.functionName}`);
     }
-
-    console.log('swap-gasless args:', { fn: functionName, feeAmount, relayerAddress, feeToken: selectedFeeToken });
   }
 
   const transaction = await makeUnsignedContractCall({
@@ -210,7 +208,6 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
   const isDirectSwap = isDeveloperSponsored;
 
   const txHex = transaction.serialize();
-  console.log('Built sponsored tx:', txHex.slice(0, 8), 'length:', txHex.length, isDirectSwap ? '(direct swap)' : '(paymaster swap)');
 
   // Step 7: Wallet signs WITHOUT broadcasting
   onProgress?.('Waiting for wallet signature...');
@@ -237,6 +234,5 @@ export async function executeSimpleGaslessSwap(params: SimpleGaslessSwapParams):
     network: config.stacksNetwork as 'mainnet' | 'testnet'
   });
 
-  console.log('VelumX sponsor result:', result);
   return result.txid;
 }

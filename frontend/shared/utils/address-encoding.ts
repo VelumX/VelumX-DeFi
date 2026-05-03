@@ -77,9 +77,7 @@ export function encodeEthereumAddress(address: string): Hex {
   paddedBytes.fill(0); // Fill with zeros
   paddedBytes.set(addressBytes, 12); // Place address at the end (left-padded)
   
-  console.log('Before toHex, paddedBytes:', paddedBytes);
   const result: Hex = toHex(paddedBytes);
-  console.log('After toHex, result type:', typeof result, 'value:', result);
   return result;
 }
 

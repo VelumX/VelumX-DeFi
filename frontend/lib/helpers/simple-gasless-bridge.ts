@@ -53,7 +53,7 @@ export async function executeSimpleGaslessBridge(params: SimpleGaslessBridgePara
       const stxEntry = (addrResult?.addresses || []).find((a: any) => a.address === userAddress)
         || (addrResult?.addresses || [])[0];
       publicKey = stxEntry?.publicKey || '';
-    } catch (e) { console.warn('stx_getAddresses failed:', e); }
+    } catch (e) { /* ignore */ }
   }
   if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
 
@@ -65,7 +65,7 @@ export async function executeSimpleGaslessBridge(params: SimpleGaslessBridgePara
       const accountData = await nonceRes.json();
       nonce = BigInt(accountData.nonce ?? 0);
     }
-  } catch (e) { console.warn('Failed to fetch nonce:', e); }
+  } catch (e) { /* use 0 */ }
 
   // Step 4: Build the bridge-usdcx call on velumx-defi-paymaster-v1
   onProgress?.('Preparing transaction...');
@@ -98,8 +98,6 @@ export async function executeSimpleGaslessBridge(params: SimpleGaslessBridgePara
     network: 'mainnet',
   });
 
-  console.log('[Bridge] Built sponsored tx via velumx-defi-paymaster-v1 bridge-usdcx');
-
   // Step 6: Wallet signs (no broadcast)
   onProgress?.('Waiting for wallet signature...');
 
@@ -131,6 +129,5 @@ export async function executeSimpleGaslessBridge(params: SimpleGaslessBridgePara
     network: 'mainnet',
   });
 
-  console.log('VelumX bridge result:', result);
   return result.txid;
 }

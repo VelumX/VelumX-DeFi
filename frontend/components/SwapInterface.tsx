@@ -103,6 +103,39 @@ function resolveTokenAddress(tokenId: string): string {
 }
 
 
+/**
+ * Translate raw relayer/SDK error messages into user-friendly text.
+ */
+function translateSwapError(message: string): string {
+  if (!message) return 'Swap failed. Please try again.';
+  const m = message.toLowerCase();
+
+  if (m.includes('badfunctionargument') || m.includes('bad function argument'))
+    return 'Transaction rejected — the selected gas token is not compatible with this swap route. Try a different gas token.';
+  if (m.includes('insufficientfunds') || m.includes('insufficient funds') || m.includes('not enough'))
+    return 'Insufficient balance to complete this swap.';
+  if (m.includes('cancel') || m.includes('rejected by user') || m.includes('user denied'))
+    return 'Swap cancelled.';
+  if (m.includes('broadcast failed'))
+    return 'Transaction broadcast failed. The network may be congested — please try again.';
+  if (m.includes('503') || m.includes('service unavailable'))
+    return 'VelumX relayer is temporarily unavailable. Please try again in a moment.';
+  if (m.includes('timed out') || m.includes('timeout'))
+    return 'Request timed out. Please check your connection and try again.';
+  if (m.includes('public key not available') || m.includes('reconnect your wallet'))
+    return 'Wallet verification required. Please disconnect and reconnect your wallet.';
+  if (m.includes('relayer address not available'))
+    return 'Gasless service unavailable. Try disabling gasless mode.';
+  if (m.includes('no amm pool') || m.includes('no liquidity') || m.includes('no route'))
+    return 'No liquidity found for this token pair.';
+  if (m.includes('slippage') || m.includes('min-dy') || m.includes('min-dz') || m.includes('min-dw'))
+    return 'Swap failed due to price movement. Try increasing slippage tolerance in settings.';
+
+  // Strip internal stack traces — only show the first sentence
+  const firstLine = message.split('\n')[0].replace(/^RelayerError:\s*/i, '').replace(/^VelumX RelayerError:\s*/i, '').trim();
+  return firstLine || 'Swap failed. Please try again.';
+}
+
 export function SwapInterface() {
   const { stacksAddress, stacksConnected, balances, fetchBalances, stacksPublicKey, recoverPublicKey } = useWallet();
   const config = useConfig();
@@ -446,7 +479,6 @@ export function SwapInterface() {
     } catch (error: any) {
       if (generation !== quoteGenRef.current) return;
       if (retryCount < 1) {
-        console.warn('[Swap] Quote failed, retrying...', error?.message);
         return fetchQuote(retryCount + 1);
       }
       setState(prev => ({
@@ -685,7 +717,7 @@ export function SwapInterface() {
 
         const amountIn = parseFloat(state.inputAmount);
 
-        console.log('[Swap] Generating params for route:', bestRoute);
+
 
         const swapParams = await bitflow.getSwapParams({
           route: bestRoute,
@@ -736,7 +768,7 @@ export function SwapInterface() {
       setState(prev => ({
         ...prev,
         isProcessing: false,
-        error: (error as Error).message || 'Failed to execute swap',
+        error: translateSwapError((error as Error).message),
       }));
     }
   };

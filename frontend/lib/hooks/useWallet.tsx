@@ -544,8 +544,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         throw new Error('No Stacks address returned from wallet.');
       }
 
-      console.log('Stacks Wallet Connected:', { address, wallet: preferredWallet, hasPublicKey: !!publicKey });
-
       setState(prev => ({
         ...prev,
         stacksAddress: address,
@@ -599,7 +597,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
       const publicKey = stxEntry?.publicKey || '';
       if (publicKey) {
-        console.log('Recovered public key via stx_getAddresses');
         setState(prev => ({ ...prev, stacksPublicKey: publicKey }));
         return publicKey;
       }
