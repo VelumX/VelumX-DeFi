@@ -31,15 +31,22 @@ export function StacksWalletButton() {
       <>
         <button
           onClick={() => setShowConnector(true)}
-          className="flex items-center justify-center gap-2 w-full px-5 py-2.5 rounded-full font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98]"
+          className="flex items-center justify-center gap-2 w-full font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98]"
           style={{
-            background: 'linear-gradient(135deg, #2563EB, #1D4ED8)',
+            // Match RainbowKit ConnectButton dimensions and shape exactly
+            height: '40px',
+            borderRadius: '12px',
+            padding: '0 16px',
+            background: '#2563EB',
             color: '#fff',
-            boxShadow: '0 4px 14px rgba(37,99,235,0.35)',
+            fontSize: '14px',
+            fontWeight: 700,
+            boxShadow: 'none',
+            border: 'none',
           }}
         >
-          <Wallet size={16} />
-          Connect Wallet
+          <Wallet size={15} />
+          Connect Stacks
         </button>
         {showConnector && (
           <StacksWalletConnector onClose={() => setShowConnector(false)} />
@@ -53,11 +60,16 @@ export function StacksWalletButton() {
       <div className="relative w-full">
         <button
           onClick={() => setShowDropdown(!showDropdown)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-full transition-colors hover:opacity-80 w-full"
+          className="flex items-center gap-2 transition-all hover:opacity-80 w-full"
           style={{
+            height: '40px',
+            borderRadius: '12px',
+            padding: '0 12px',
             backgroundColor: 'var(--bg-primary)',
             border: '1px solid var(--border-color)',
             color: 'var(--text-primary)',
+            fontSize: '14px',
+            fontWeight: 700,
           }}
         >
           <div

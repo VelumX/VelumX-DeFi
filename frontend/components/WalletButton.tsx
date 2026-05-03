@@ -1,6 +1,7 @@
 /**
  * WalletButton — Bridge page only
- * Shows RainbowKit ConnectButton (Ethereum) + StacksWalletButton side by side.
+ * Shows RainbowKit ConnectButton (Ethereum) + StacksWalletButton (Stacks).
+ * Both buttons are sized identically so they look like a matched pair.
  */
 
 'use client';
@@ -16,7 +17,7 @@ const StacksWalletButton = dynamic(
 export function WalletButton() {
   return (
     <div className="flex flex-col gap-2 w-full">
-      {/* Ethereum — RainbowKit native modal */}
+      {/* Ethereum — RainbowKit native modal, accent colour set to #2563EB in EthereumProvider */}
       <ConnectButton
         label="Connect Ethereum"
         accountStatus="address"
@@ -24,7 +25,7 @@ export function WalletButton() {
         showBalance={false}
       />
 
-      {/* Stacks */}
+      {/* Stacks — styled to match RainbowKit button height/radius/weight */}
       <StacksWalletButton />
     </div>
   );

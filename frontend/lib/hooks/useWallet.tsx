@@ -493,16 +493,18 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
 
       // ── Xverse ───────────────────────────────────────────────────────────
-      // Xverse responds to stx_getAddresses via @stacks/connect request().
+      // When called from the "Bitcoin Wallets" button, forceWalletSelect: true
+      // opens @stacks/connect's native picker (Xverse, Leather, etc. with
+      // their real icons). No double-modal — our modal closes before this runs.
       else if (preferredWallet === 'xverse') {
-        const { request: stacksRequest } = await import('@stacks/connect');
+        const { connect: stacksConnect } = await import('@stacks/connect');
         try {
-          const result = await stacksRequest('stx_getAddresses') as any;
-          const addrs: any[] = result?.addresses ?? [];
+          const response = await stacksConnect({ forceWalletSelect: true }) as any;
+          const addrs: any[] = response?.addresses ?? [];
           const stxEntry = addrs.find((a: any) =>
             a.address?.startsWith('SP') || a.address?.startsWith('ST')
           );
-          if (!stxEntry?.address) throw new Error('No Stacks address returned from Xverse.');
+          if (!stxEntry?.address) throw new Error('No Stacks address returned.');
           address = stxEntry.address;
           publicKey = stxEntry.publicKey ?? '';
         } catch (err: any) {
@@ -511,25 +513,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (msg.includes('cancel') || msg.includes('reject') || msg.includes('denied') || msg.includes('user refused') || msg.includes('cancelled')) {
             throw new Error('Cancelled');
           }
-          // Fallback: open Xverse popup without the @stacks/connect picker
-          try {
-            const { connect: stacksConnect } = await import('@stacks/connect');
-            const response = await stacksConnect({ forceWalletSelect: false }) as any;
-            const addrs2: any[] = response?.addresses ?? [];
-            const entry = addrs2.find((a: any) =>
-              a.address?.startsWith('SP') || a.address?.startsWith('ST')
-            );
-            if (!entry?.address) throw new Error('No Stacks address returned from Xverse.');
-            address = entry.address;
-            publicKey = entry.publicKey ?? '';
-          } catch (fallbackErr: any) {
-            setState(prev => ({ ...prev, isConnecting: false }));
-            const m = (fallbackErr?.message ?? '').toLowerCase();
-            if (m.includes('cancel') || m.includes('reject') || m.includes('denied') || m.includes('user refused') || m.includes('cancelled')) {
-              throw new Error('Cancelled');
-            }
-            throw fallbackErr;
-          }
+          throw err;
         }
       }
 
