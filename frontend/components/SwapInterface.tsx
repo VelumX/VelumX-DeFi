@@ -295,18 +295,19 @@ export function SwapInterface() {
       const tokenOutId = getTokenId(state.outputToken);
       const amountIn   = parseFloat(state.inputAmount);
 
-      // Run both quotes in parallel — ALEX only if the pair is supported
+      // Run both quotes in parallel — ALEX only if the pair is not known-unsupported
       const alexSupported = isAlexPair(state.inputToken.address, state.outputToken.address);
 
       const [bitflowResult, alexResult] = await Promise.all([
         getParallelQuote(tokenInId, tokenOutId, amountIn).catch(() => null),
-        alexSupported
+        alexSupported && stacksAddress
           ? getAlexQuote(
               state.inputToken.address,
               state.outputToken.address,
               amountIn,
               state.inputToken.decimals,
               state.outputToken.decimals,
+              stacksAddress,
             ).catch(() => null)
           : Promise.resolve(null),
       ]);

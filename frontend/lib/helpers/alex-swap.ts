@@ -1,49 +1,69 @@
 /**
  * ALEX swap helpers — quote and gasless execution via simple-paymaster-v3.
  *
- * Paymaster contract: SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.simple-paymaster-v3
+ * Uses the same token resolution and runSwap pattern as simple-gasless-swap.ts
+ * which is proven to work with all ALEX pairs.
  *
- * Functions used:
- *   swap-gasless   — 1-hop  (token-x, token-y, factor, dx, min-dy, fee-amount, relayer, fee-token)
- *   swap-gasless-a — 2-hop  (token-x, token-y, token-z, factor-x, factor-y, dx, min-dz, ...)
- *   swap-gasless-b — 3-hop  (token-x, token-y, token-z, token-w, factor-x, factor-y, factor-z, dx, min-dw, ...)
+ * Paymaster: SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW.simple-paymaster-v3
  */
 
-import {
-  contractPrincipalCV,
-  uintCV,
-  someCV,
-  noneCV,
-  standardPrincipalCV,
-} from '@stacks/transactions';
-import { getAlexSDK, principalToCurrency, currencyToPrincipal } from '../alex';
+import { AlexSDK } from 'alex-sdk';
 import { getVelumXClient } from '../velumx';
-import { Currency } from 'alex-sdk';
+import { getConfig } from '../config';
+import {
+  makeUnsignedContractCall,
+  PostConditionMode,
+  Cl,
+  principalCV,
+  uintCV,
+} from '@stacks/transactions';
+import { request } from '@stacks/connect';
 
-const ALEX_PAYMASTER = 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW';
-const ALEX_PAYMASTER_NAME = 'simple-paymaster-v3';
+const ALEX_PAYMASTER_ADDRESS = 'SPKYNF473GQ1V0WWCF24TV7ZR1WYAKTC7AM8QGBW';
+const ALEX_PAYMASTER_NAME    = 'simple-paymaster-v3';
 
-// ALEX pool factor — always 1_000_000_00 (1e8) for standard pools
-const DEFAULT_FACTOR = BigInt(100_000_000);
+// ── Token resolution ──────────────────────────────────────────────────────────
+
+/**
+ * Resolve a contract principal or token ID to an ALEX token ID string.
+ * Returns null if the token is not supported by ALEX.
+ * Mirrors the resolveAlexId logic in simple-gasless-swap.ts.
+ */
+async function resolveAlexId(token: string, alex: AlexSDK): Promise<string | null> {
+  if (token === 'token-wstx' || token === 'STX') return 'token-wstx';
+  if (!token.includes('.') && !token.startsWith('SP') && !token.startsWith('ST')) return token;
+  try {
+    const allTokens = await alex.fetchSwappableCurrency();
+    const match = allTokens.find((t: any) => {
+      const contractAddr = t.wrapToken ? t.wrapToken.split('::')[0] : '';
+      return (
+        contractAddr?.toLowerCase() === token?.toLowerCase() ||
+        t.id?.toLowerCase() === token?.toLowerCase()
+      );
+    });
+    return match ? match.id : null;
+  } catch {
+    return null;
+  }
+}
 
 // ── Quote ─────────────────────────────────────────────────────────────────────
 
 export interface AlexQuoteResult {
   /** Human-readable output amount */
   amountOut: number;
-  /** Raw output in micro-units */
+  /** Raw output in ALEX 1e8 units */
   amountOutRaw: bigint;
-  /** Waypoints (token path) as contract principals */
-  path: string[];
-  /** ALEX Currency route */
-  route: Currency[];
-  /** Pool factors for each hop */
-  factors: bigint[];
+  /** ALEX token IDs for input and output */
+  alexTokenIn: string;
+  alexTokenOut: string;
+  /** The swap tx params from alex.runSwap — reused at execution time */
+  swapTx: Awaited<ReturnType<AlexSDK['runSwap']>>;
 }
 
 /**
  * Get a quote from ALEX for the given token pair and input amount.
- * Returns null if the pair is not supported by ALEX.
+ * Returns null if the pair is not supported by ALEX or no liquidity exists.
  */
 export async function getAlexQuote(
   tokenInAddress: string,
@@ -51,38 +71,46 @@ export async function getAlexQuote(
   amountIn: number,
   tokenInDecimals: number,
   tokenOutDecimals: number,
+  userAddress: string,
 ): Promise<AlexQuoteResult | null> {
-  const currencyIn  = principalToCurrency(tokenInAddress);
-  const currencyOut = principalToCurrency(tokenOutAddress);
+  const alex = new AlexSDK();
 
-  if (!currencyIn || !currencyOut) return null;
+  const [alexTokenIn, alexTokenOut] = await Promise.all([
+    resolveAlexId(tokenInAddress, alex),
+    resolveAlexId(tokenOutAddress, alex),
+  ]);
 
-  const alex = getAlexSDK();
-  const amountInRaw = BigInt(Math.floor(amountIn * Math.pow(10, tokenInDecimals)));
+  if (!alexTokenIn || !alexTokenOut) return null;
 
   try {
-    // Get the best route
-    const route = await alex.getRouter(currencyIn, currencyOut);
-    if (!route || route.length < 2) return null;
+    // Convert to ALEX 1e8 units
+    const amountInRaw = BigInt(Math.floor(amountIn * Math.pow(10, tokenInDecimals)));
+    // ALEX always works in 1e8 internally — convert from token decimals to 1e8
+    const alexAmountIn = BigInt(Math.floor(amountIn * 1e8));
 
-    // Get the output amount for this route
+    // Get output amount
     const amountOutRaw = await alex.getAmountTo(
-      currencyIn,
-      amountInRaw,
-      currencyOut,
+      alexTokenIn as any,
+      alexAmountIn,
+      alexTokenOut as any,
     );
 
     if (!amountOutRaw || amountOutRaw <= 0n) return null;
 
+    // Convert from ALEX 1e8 to human-readable using output token decimals
     const amountOut = Number(amountOutRaw) / Math.pow(10, tokenOutDecimals);
 
-    // Build path as contract principals
-    const path = route.map(currencyToPrincipal);
+    // Pre-build the swap tx (reused at execution time — avoids double SDK call)
+    // Use 0 as minDy for the quote — execution will apply slippage
+    const swapTx = await alex.runSwap(
+      userAddress,
+      alexTokenIn as any,
+      alexTokenOut as any,
+      alexAmountIn,
+      0n, // min-dy: 0 for quote only
+    );
 
-    // Factors: one per hop (route has N tokens → N-1 hops, each factor = DEFAULT_FACTOR)
-    const factors = Array(route.length - 1).fill(DEFAULT_FACTOR) as bigint[];
-
-    return { amountOut, amountOutRaw, path, route, factors };
+    return { amountOut, amountOutRaw, alexTokenIn, alexTokenOut, swapTx };
   } catch (err) {
     console.warn('[ALEX] Quote failed:', err);
     return null;
@@ -93,6 +121,7 @@ export async function getAlexQuote(
 
 export interface AlexGaslessSwapParams {
   userAddress: string;
+  userPublicKey?: string;
   tokenInAddress: string;
   tokenOutAddress: string;
   amountIn: number;
@@ -100,15 +129,14 @@ export interface AlexGaslessSwapParams {
   tokenOutDecimals: number;
   feeToken: string;
   slippage?: number;           // fraction, e.g. 0.005 = 0.5%
-  quote?: AlexQuoteResult;     // pre-fetched quote — skips re-fetch if provided
-  feeEstimate?: any;           // pre-fetched fee estimate
+  quote?: AlexQuoteResult;     // pre-fetched — skips re-fetch if provided
+  feeEstimate?: any;
   onProgress?: (msg: string) => void;
 }
 
 /**
  * Execute a gasless ALEX swap via simple-paymaster-v3.
- * Builds the Clarity call, signs it via @stacks/connect, and submits.
- * Returns the transaction ID.
+ * Mirrors the execution path in simple-gasless-swap.ts.
  */
 export async function executeAlexGaslessSwap(
   params: AlexGaslessSwapParams,
@@ -125,114 +153,167 @@ export async function executeAlexGaslessSwap(
     onProgress,
   } = params;
 
-  onProgress?.('Initialising ALEX swap...');
+  const config  = getConfig();
+  const velumx  = getVelumXClient();
+  const selectedFeeToken = feeToken || config.stacksUsdcxAddress;
 
-  // 1. Get quote (or use pre-fetched)
-  const quote = params.quote ?? await getAlexQuote(
-    tokenInAddress, tokenOutAddress, amountIn, tokenInDecimals, tokenOutDecimals,
-  );
-  if (!quote) throw new Error('ALEX does not support this token pair.');
-
-  // 2. Get fee estimate (or use pre-fetched)
   onProgress?.('Estimating gasless fee...');
-  const velumx = getVelumXClient();
   const estimate = params.feeEstimate ?? await velumx.estimateFee({
-    feeToken,
-    estimatedGas: 250_000,
+    feeToken: selectedFeeToken,
+    estimatedGas: 150_000,
   });
 
-  const feeAmount = BigInt(estimate.maxFee ?? 0);
-  const relayerAddress: string = estimate.relayerAddress ?? '';
-  if (!relayerAddress) {
-    throw new Error('Relayer address not available. Check VelumX configuration.');
+  const feeAmount = String(estimate.maxFee ?? '0');
+  const relayerAddress: string = (estimate as any).relayerAddress ?? config.velumxRelayerAddress ?? '';
+  if (!relayerAddress) throw new Error('Relayer address not available. Check VelumX configuration.');
+
+  onProgress?.('Preparing ALEX transaction...');
+  const alex = new AlexSDK();
+
+  // Resolve token IDs
+  const [alexTokenIn, alexTokenOut] = await Promise.all([
+    resolveAlexId(tokenInAddress, alex),
+    resolveAlexId(tokenOutAddress, alex),
+  ]);
+  if (!alexTokenIn || !alexTokenOut) {
+    throw new Error('ALEX does not support this token pair.');
   }
 
-  // 3. Build Clarity args
-  onProgress?.('Building transaction...');
+  const alexAmountIn = BigInt(Math.floor(amountIn * 1e8));
 
-  const amountInRaw = BigInt(Math.floor(amountIn * Math.pow(10, tokenInDecimals)));
-  const minOut = BigInt(Math.floor(Number(quote.amountOutRaw) * (1 - slippage)));
+  // Apply slippage to the quoted output
+  let minDy = 0n;
+  if (params.quote?.amountOutRaw) {
+    minDy = BigInt(Math.floor(Number(params.quote.amountOutRaw) * (1 - slippage)));
+  }
 
-  // Helper: contractPrincipalCV from "ADDR.name"
-  const toContractCV = (principal: string) => {
-    const [addr, name] = principal.split('.');
-    return contractPrincipalCV(addr, name);
-  };
+  // Get swap params from ALEX SDK (same as simple-gasless-swap.ts)
+  const swapTx = params.quote?.swapTx ?? await alex.runSwap(
+    userAddress,
+    alexTokenIn as any,
+    alexTokenOut as any,
+    alexAmountIn,
+    minDy,
+  );
 
-  const [feeTokenAddr, feeTokenName] = feeToken.split('.');
-  const feeTokenCV = contractPrincipalCV(feeTokenAddr, feeTokenName);
-  const relayerCV  = standardPrincipalCV(relayerAddress);
+  // Get public key
+  let publicKey = params.userPublicKey ?? '';
+  if (!publicKey) {
+    try {
+      const addrResult = await request('stx_getAddresses') as any;
+      const stxEntry = (addrResult?.addresses ?? []).find((a: any) => a.address === userAddress)
+        ?? (addrResult?.addresses ?? [])[0];
+      publicKey = stxEntry?.publicKey ?? '';
+    } catch { /* ignore */ }
+  }
+  if (!publicKey) throw new Error('Wallet public key not available. Please reconnect your wallet.');
 
-  const hops = quote.route.length - 1; // number of swaps
+  // Fetch nonce
+  let nonce = 0n;
+  try {
+    const nonceRes = await fetch(`/api/hiro/v2/accounts/${userAddress}?proof=0`);
+    if (nonceRes.ok) {
+      const data = await nonceRes.json();
+      nonce = BigInt(data.nonce ?? 0);
+    }
+  } catch { /* use 0 */ }
+
+  // Build paymaster function args — same mapping as simple-gasless-swap.ts
+  const [feeTokenAddr, feeTokenName] = selectedFeeToken.split('.');
+  const feeTokenCV  = Cl.contractPrincipal(feeTokenAddr, feeTokenName);
+  const feeAmountCV = uintCV(BigInt(feeAmount));
+  const relayerCV   = principalCV(relayerAddress);
 
   let functionName: string;
-  let functionArgs: ReturnType<typeof uintCV>[];
+  let functionArgs: any[];
 
-  if (hops === 1) {
-    // swap-gasless(token-x, token-y, factor, dx, min-dy, fee-amount, relayer, fee-token)
+  if (swapTx.functionName === 'swap-helper') {
     functionName = 'swap-gasless';
     functionArgs = [
-      toContractCV(quote.path[0]),
-      toContractCV(quote.path[1]),
-      uintCV(quote.factors[0]),
-      uintCV(amountInRaw),
-      someCV(uintCV(minOut)),
-      uintCV(feeAmount),
+      swapTx.functionArgs[0], // token-x-trait
+      swapTx.functionArgs[1], // token-y-trait
+      swapTx.functionArgs[2], // factor
+      swapTx.functionArgs[3], // dx
+      swapTx.functionArgs[4], // min-dy
+      feeAmountCV,
       relayerCV,
       feeTokenCV,
-    ] as any;
-  } else if (hops === 2) {
-    // swap-gasless-a(token-x, token-y, token-z, factor-x, factor-y, dx, min-dz, fee-amount, relayer, fee-token)
+    ];
+  } else if (swapTx.functionName === 'swap-helper-a') {
     functionName = 'swap-gasless-a';
     functionArgs = [
-      toContractCV(quote.path[0]),
-      toContractCV(quote.path[1]),
-      toContractCV(quote.path[2]),
-      uintCV(quote.factors[0]),
-      uintCV(quote.factors[1]),
-      uintCV(amountInRaw),
-      someCV(uintCV(minOut)),
-      uintCV(feeAmount),
+      swapTx.functionArgs[0], // token-x-trait
+      swapTx.functionArgs[1], // token-y-trait
+      swapTx.functionArgs[2], // token-z-trait
+      swapTx.functionArgs[3], // factor-x
+      swapTx.functionArgs[4], // factor-y
+      swapTx.functionArgs[5], // dx
+      swapTx.functionArgs[6], // min-dz
+      feeAmountCV,
       relayerCV,
       feeTokenCV,
-    ] as any;
-  } else if (hops === 3) {
-    // swap-gasless-b(token-x, token-y, token-z, token-w, factor-x, factor-y, factor-z, dx, min-dw, fee-amount, relayer, fee-token)
+    ];
+  } else if (swapTx.functionName === 'swap-helper-b') {
     functionName = 'swap-gasless-b';
     functionArgs = [
-      toContractCV(quote.path[0]),
-      toContractCV(quote.path[1]),
-      toContractCV(quote.path[2]),
-      toContractCV(quote.path[3]),
-      uintCV(quote.factors[0]),
-      uintCV(quote.factors[1]),
-      uintCV(quote.factors[2]),
-      uintCV(amountInRaw),
-      someCV(uintCV(minOut)),
-      uintCV(feeAmount),
+      swapTx.functionArgs[0], // token-x-trait
+      swapTx.functionArgs[1], // token-y-trait
+      swapTx.functionArgs[2], // token-z-trait
+      swapTx.functionArgs[3], // token-w-trait
+      swapTx.functionArgs[4], // factor-x
+      swapTx.functionArgs[5], // factor-y
+      swapTx.functionArgs[6], // factor-z
+      swapTx.functionArgs[7], // dx
+      swapTx.functionArgs[8], // min-dw
+      feeAmountCV,
       relayerCV,
       feeTokenCV,
-    ] as any;
+    ];
   } else {
-    throw new Error(`ALEX route has ${hops} hops — only 1–3 hops are supported by the paymaster.`);
+    throw new Error(`Unsupported ALEX swap function: ${swapTx.functionName}`);
   }
 
-  // 4. Sign and submit via @stacks/connect
-  onProgress?.('Waiting for wallet approval...');
-  const { request: stacksRequest } = await import('@stacks/connect');
-
-  const result = await stacksRequest('stx_callContract', {
-    contract: `${ALEX_PAYMASTER}.${ALEX_PAYMASTER_NAME}`,
+  // Build unsigned sponsored tx
+  const transaction = await makeUnsignedContractCall({
+    contractAddress: ALEX_PAYMASTER_ADDRESS,
+    contractName:    ALEX_PAYMASTER_NAME,
     functionName,
     functionArgs,
-    network: 'mainnet',
-    postConditionMode: 'allow',
+    postConditionMode: PostConditionMode.Allow,
     postConditions: [],
-  }) as any;
+    network: 'mainnet',
+    sponsored: true,
+    publicKey,
+    fee: 0n,
+    nonce,
+    validateWithAbi: false,
+  });
 
-  const txid: string = result?.txid ?? result?.result?.txid;
-  if (!txid) throw new Error('No transaction ID returned from wallet.');
+  const txHex = transaction.serialize();
 
-  onProgress?.(`ALEX swap submitted! TX: ${txid}`);
-  return txid;
+  // Wallet signs without broadcasting
+  onProgress?.('Waiting for wallet approval...');
+  let signedTxHex: string;
+  try {
+    const signResult = await request('stx_signTransaction', {
+      transaction: txHex,
+      broadcast: false,
+    }) as any;
+    signedTxHex = signResult.transaction ?? signResult.txHex;
+    if (!signedTxHex) throw new Error('Wallet did not return signed transaction.');
+  } catch (err: any) {
+    const msg = (err?.message ?? '').toLowerCase();
+    if (msg.includes('cancel') || err?.code === 4001) throw new Error('Swap cancelled by user.');
+    throw err;
+  }
+
+  // Relayer co-signs + broadcasts
+  onProgress?.('Broadcasting via VelumX...');
+  const result = await velumx.sponsor(signedTxHex, {
+    feeToken: selectedFeeToken,
+    feeAmount,
+    network: config.stacksNetwork as 'mainnet' | 'testnet',
+  });
+
+  return result.txid;
 }
