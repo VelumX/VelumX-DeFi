@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "../lib/hooks/useWallet";
 import { PolyfillProvider } from "@/components/providers/PolyfillProvider";
+import { EthereumProvider } from "@/components/providers/EthereumProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -123,9 +124,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <PolyfillProvider>
-          <WalletProvider>
-            {children}
-          </WalletProvider>
+          <EthereumProvider>
+            <WalletProvider>
+              {children}
+            </WalletProvider>
+          </EthereumProvider>
         </PolyfillProvider>
       </body>
     </html>

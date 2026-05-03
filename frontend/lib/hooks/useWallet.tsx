@@ -12,7 +12,7 @@ import { useConfig, USDC_ABI, TOKEN_DECIMALS } from '../config';
 import { getStacksConnect, getStacksTransactions } from '../stacks-loader';
 
 export type EthereumWalletType = 'rabby' | 'metamask' | 'injected';
-export type StacksWalletType = 'xverse' | 'leather' | 'hiro';
+export type StacksWalletType = 'xverse' | 'leather' | 'hiro' | 'okx';
 
 export interface WalletBalances {
   eth: string;
@@ -393,7 +393,55 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const connectStacks = useCallback(async (preferredWallet?: StacksWalletType) => {
     setState(prev => ({ ...prev, isConnecting: true }));
     try {
-      // Use @stacks/connect v8 request API — always returns publicKey
+      // ── OKX Wallet: inject its provider directly ──────────────────────────
+      // OKX doesn't register via the standard Stacks wallet discovery protocol,
+      // so we target window.okxwallet.stacks directly.
+      if (preferredWallet === 'okx') {
+        const win = window as any;
+        const okxStacks = win.okxwallet?.stacks ?? win.okxwallet?.bitcoin;
+        if (!okxStacks) {
+          throw new Error('OKX Wallet not detected. Please install the OKX browser extension.');
+        }
+
+        // OKX implements the Stacks provider protocol — request addresses
+        let address: string | null = null;
+        let publicKey = '';
+
+        try {
+          // Try stx_getAddresses first (standard Stacks RPC)
+          const result = await okxStacks.request({ method: 'stx_getAddresses' });
+          const addrs = result?.addresses ?? result?.result?.addresses ?? [];
+          const stxEntry = addrs.find((a: any) =>
+            a.address?.startsWith('SP') || a.address?.startsWith('ST')
+          );
+          address = stxEntry?.address ?? null;
+          publicKey = stxEntry?.publicKey ?? '';
+        } catch {
+          // Fallback: connect() style
+          try {
+            const result = await okxStacks.connect?.();
+            address = result?.address ?? result?.stxAddress ?? null;
+            publicKey = result?.publicKey ?? '';
+          } catch {
+            throw new Error('OKX Wallet connection failed. Please try again.');
+          }
+        }
+
+        if (!address) throw new Error('No Stacks address returned from OKX Wallet.');
+
+        setState(prev => ({
+          ...prev,
+          stacksAddress: address!,
+          stacksPublicKey: publicKey,
+          stacksConnected: true,
+          stacksWalletType: 'okx',
+          isConnecting: false,
+        }));
+        fetchStacksBalances(address);
+        return address;
+      }
+
+      // ── Xverse / Leather / Hiro: standard @stacks/connect flow ───────────
       const { request: stacksRequest, connect: stacksConnect } = await import('@stacks/connect');
 
       // connect() triggers wallet selection + returns addresses with public keys
@@ -534,7 +582,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     fetchBalances,
     getAvailableWallets: () => ({
       ethereum: detectEthereumWallets(),
-      stacks: ['xverse', 'leather', 'hiro'] as StacksWalletType[]
+      stacks: ['okx', 'xverse', 'leather', 'hiro'] as StacksWalletType[]
     }),
     switchEthereumNetwork,
     recoverPublicKey

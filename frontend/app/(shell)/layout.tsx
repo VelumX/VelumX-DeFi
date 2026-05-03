@@ -83,9 +83,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           </button>
 
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-[10px] font-bold text-green-500">Stacks Mainnet: Online</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full"
+              style={{
+                backgroundColor: 'rgba(59,130,246,0.08)',
+                border: '1px solid rgba(59,130,246,0.2)',
+              }}>
+              <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#3B82F6' }} />
+              <span className="text-[10px] font-bold" style={{ color: '#3B82F6' }}>Stacks Mainnet: Online</span>
             </div>
           </div>
         </header>
@@ -108,9 +112,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           >
             <p>© 2024 VelumX Lab • Professional DeFi Infrastructure</p>
             <div className="flex gap-6">
-              <a href="#" className="hover:text-purple-500 transition-colors">Documentation</a>
-              <a href="#" className="hover:text-purple-500 transition-colors">Status</a>
-              <a href="#" className="hover:text-purple-500 transition-colors">Privacy Policy</a>
+              <a href="#" className="transition-colors hover:opacity-70">Documentation</a>
+              <a href="#" className="transition-colors hover:opacity-70">Status</a>
+              <a href="#" className="transition-colors hover:opacity-70">Privacy Policy</a>
             </div>
           </div>
         </footer>

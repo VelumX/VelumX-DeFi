@@ -61,10 +61,10 @@ export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }:
                     <img src="/velumx-icon.svg" alt="VelumX" className="h-6 w-6" />
                 </div>
                 <div className="flex flex-col">
-                    <span className="text-xl font-bold text-purple-600 dark:text-purple-400">
+                    <span className="text-xl font-bold" style={{ color: '#2563EB' }}>
                         VelumX
                     </span>
-                    <span className="text-[10px] font-bold tracking-widest text-orange-500 opacity-80">
+                    <span className="text-[10px] font-bold tracking-widest opacity-60" style={{ color: 'var(--text-secondary)' }}>
                         MAINNET
                     </span>
                 </div>
@@ -83,19 +83,28 @@ export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }:
                             onClick={onClose}
                             aria-current={isActive ? 'page' : undefined}
                             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-300 group ${isActive
-                                ? 'bg-gradient-to-r from-purple-600/10 to-blue-600/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 shadow-lg shadow-purple-500/5'
+                                ? 'border shadow-sm'
                                 : 'text-black hover:bg-gray-100/50 dark:text-gray-400 dark:hover:text-white dark:hover:bg-gray-800/50'
                                 }`}
+                            style={isActive ? {
+                                background: 'rgba(37,99,235,0.07)',
+                                borderColor: 'rgba(37,99,235,0.18)',
+                                color: '#2563EB',
+                            } : {}}
                         >
                             <div className={`p-1.5 rounded-lg transition-all duration-300 ${isActive
-                                ? 'bg-purple-600 text-white shadow-md'
+                                ? 'text-white shadow-md'
                                 : `${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-slate-800 text-white border-slate-700'} border shadow-sm group-hover:scale-110`
-                                }`}>
+                                }`}
+                                style={isActive ? { backgroundColor: '#2563EB' } : {}}
+                            >
                                 <Icon className="h-4 w-4" />
                             </div>
                             <span>{item.label}</span>
                             {isActive && (
-                                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-purple-500 shadow-glow animate-pulse" />
+                                <div className="ml-auto w-1.5 h-1.5 rounded-full animate-pulse"
+                                    style={{ backgroundColor: '#3B82F6', boxShadow: '0 0 6px rgba(59,130,246,0.6)' }}
+                                />
                             )}
                         </Link>
                     );
@@ -116,21 +125,21 @@ export function Sidebar({ isDarkMode, toggleDarkMode, isOpen = false, onClose }:
                 >
                     <button
                         onClick={toggleDarkMode}
-                        className="p-2 rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-colors group"
+                        className="p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                         title={isDarkMode ? 'Switch to Light' : 'Switch to Dark'}
                     >
                         {isDarkMode ? (
-                            <Sun className="h-5 w-5 text-yellow-500 group-hover:rotate-45 transition-transform" />
+                            <Sun className="h-5 w-5 text-yellow-400" />
                         ) : (
-                            <Moon className="h-5 w-5 text-purple-600" />
+                            <Moon className="h-5 w-5" style={{ color: 'var(--text-secondary)' }} />
                         )}
                     </button>
 
                     <div className="flex gap-2">
-                        <a href="#" className="p-2 rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-colors text-gray-500 hover:text-purple-500">
+                        <a href="#" className="p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors" style={{ color: 'var(--text-secondary)' }}>
                             <Github className="h-5 w-5" />
                         </a>
-                        <a href="#" className="p-2 rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-colors text-gray-500 hover:text-blue-400">
+                        <a href="#" className="p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors" style={{ color: 'var(--text-secondary)' }}>
                             <Twitter className="h-5 w-5" />
                         </a>
                     </div>
