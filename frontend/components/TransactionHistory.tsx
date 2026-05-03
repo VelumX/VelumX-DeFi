@@ -62,10 +62,10 @@ function classifyTx(contractId: string, functionName: string): TxType {
 }
 
 const TYPE_META: Record<TxType, { label: string; icon: React.ReactNode; color: string }> = {
-  swap:      { label: 'Swap',      icon: <ArrowDownUp className="w-4 h-4" />,   color: 'text-purple-500' },
+  swap:      { label: 'Swap',      icon: <ArrowDownUp className="w-4 h-4" />,   color: 'text-blue-600' },
   bridge:    { label: 'Bridge',    icon: <ArrowLeftRight className="w-4 h-4" />, color: 'text-blue-500' },
-  stacking:  { label: 'Stacking',  icon: <TrendingUp className="w-4 h-4" />,    color: 'text-green-500' },
-  liquidity: { label: 'Liquidity', icon: <Droplets className="w-4 h-4" />,      color: 'text-orange-500' },
+  stacking:  { label: 'Stacking',  icon: <TrendingUp className="w-4 h-4" />,    color: 'text-blue-500' },
+  liquidity: { label: 'Liquidity', icon: <Droplets className="w-4 h-4" />,      color: 'text-blue-400' },
   other:     { label: 'Other',     icon: <ArrowDownUp className="w-4 h-4" />,   color: 'text-gray-400' },
 };
 
@@ -176,8 +176,8 @@ export function TransactionHistory() {
           <div className="flex gap-2 flex-wrap">
             {FILTERS.map(f => (
               <button key={f} onClick={() => setFilter(f)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 ${filter === f ? 'bg-purple-600 text-white' : ''}`}
-                style={filter !== f ? { backgroundColor: 'rgba(var(--bg-primary-rgb), 0.5)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' } : {}}>
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${filter === f ? 'text-white' : ''}`}
+                style={filter === f ? { background: 'linear-gradient(135deg, #2563EB, #1D4ED8)', boxShadow: '0 4px 12px rgba(37,99,235,0.3)' } : { backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
                 {f !== 'all' && <span className={TYPE_META[f as TxType]?.color}>{TYPE_META[f as TxType]?.icon}</span>}
                 {f.charAt(0).toUpperCase() + f.slice(1)}
                 {f !== 'all' && counts[f] ? (
@@ -199,7 +199,7 @@ export function TransactionHistory() {
         {/* Loading */}
         {loading && transactions.length === 0 && (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+            <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#2563EB' }} />
           </div>
         )}
 
@@ -262,7 +262,7 @@ export function TransactionHistory() {
                         <span className={`text-xs font-semibold capitalize ${getStatusColor(tx.status)}`}>{tx.status}</span>
                       </div>
                       <a href={getExplorerUrl(tx.chain, tx.txHash)} target="_blank" rel="noopener noreferrer"
-                        className="p-1.5 rounded-lg transition-colors hover:bg-purple-500/10 text-purple-500">
+                        className="p-1.5 rounded-lg transition-colors hover:bg-blue-500/10" style={{ color: '#2563EB' }}>
                         <ExternalLink className="w-4 h-4" />
                       </a>
                     </div>

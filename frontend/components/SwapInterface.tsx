@@ -587,12 +587,16 @@ export function SwapInterface() {
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            Swap Interface
+            Swap
           </h2>
           <button
             onClick={() => setState(prev => ({ ...prev, showSettings: !prev.showSettings }))}
-            className={`p-2 rounded-lg transition-all ${state.showSettings ? 'bg-purple-600 text-white' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}
-            style={{ color: state.showSettings ? '' : 'var(--text-secondary)' }}
+            className="p-2 rounded-xl transition-all"
+            style={{
+              backgroundColor: state.showSettings ? 'rgba(37,99,235,0.1)' : 'transparent',
+              border: `1px solid ${state.showSettings ? 'rgba(37,99,235,0.3)' : 'var(--border-color)'}`,
+              color: state.showSettings ? '#2563EB' : 'var(--text-secondary)',
+            }}
           >
             <Settings className={`w-5 h-5 ${state.showSettings ? 'animate-spin-slow' : ''}`} />
           </button>
@@ -600,15 +604,10 @@ export function SwapInterface() {
 
         {/* Token Discovery Label */}
         <div className="flex items-center gap-2 mb-6 px-1">
-          <div className={`w-2 h-2 rounded-full ${isDiscovering ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
-          <span className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
-            {isDiscovering ? 'Discovering Liquidity...' : `${tokens.length} Assets Synchronized`}
+          <div className={`w-1.5 h-1.5 rounded-full ${isDiscovering ? 'bg-yellow-500 animate-pulse' : 'bg-blue-500'}`} />
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+            {isDiscovering ? 'Discovering Liquidity...' : `${tokens.length} Assets Available`}
           </span>
-          {isDiscovering && (
-             <span className="text-[10px] font-bold text-purple-500 ml-2 animate-pulse">
-               Connecting...
-             </span>
-          )}
         </div>
 
         {/* Skeleton UI — shown while tokens are loading for the first time */}
@@ -657,10 +656,11 @@ export function SwapInterface() {
             <button
               onClick={switchTokens}
               disabled={state.isProcessing}
-              className="rounded-full p-3 transition-all disabled:opacity-50 hover:border-purple-600 dark:hover:border-purple-400 shadow-lg"
+              className="rounded-full p-2.5 transition-all disabled:opacity-50 hover:scale-110 active:scale-95"
               style={{
-                backgroundColor: 'var(--bg-surface)',
-                border: `2px solid var(--border-color)`
+                backgroundColor: 'var(--bg-primary)',
+                border: `1px solid var(--border-color)`,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
               }}
             >
               <ArrowDownUp className="w-5 h-5" style={{ color: 'var(--text-secondary)' }} />
@@ -716,7 +716,8 @@ export function SwapInterface() {
                       >
                         <div className="flex items-center gap-2 flex-wrap min-w-0">
                           {isBest && (
-                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 shrink-0">
+                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0"
+                              style={{ backgroundColor: 'rgba(37,99,235,0.12)', color: '#2563EB' }}>
                               Best
                             </span>
                           )}
@@ -740,8 +741,8 @@ export function SwapInterface() {
                             </span>
                           )}
                         </div>
-                        <span className={`text-xs font-bold shrink-0 ${isBest ? 'text-purple-400' : ''}`}
-                          style={{ color: isBest ? undefined : 'var(--text-primary)' }}>
+                        <span className="text-xs font-bold shrink-0"
+                          style={{ color: isBest ? '#2563EB' : 'var(--text-primary)' }}>
                           {quoteVal !== null ? quoteVal.toFixed(4) : '—'}
                         </span>
                       </div>
@@ -759,22 +760,27 @@ export function SwapInterface() {
 
           {/* Universal Gas Token Selector — hidden when developer sponsors gas */}
           {state.gaslessMode && sponsorshipPolicy !== 'DEVELOPER_SPONSORS' && (
-            <div className="mt-8 p-6 rounded-3xl transition-all duration-300 border border-purple-500/20 bg-purple-500/5 hover:bg-purple-500/10 relative">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                    <Zap className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                  </div>
-                  <span className="text-xs font-black uppercase tracking-widest text-purple-700 dark:text-purple-300">
+            <div className="mt-4 p-4 rounded-2xl transition-all duration-300" style={{
+              border: '1px solid rgba(37,99,235,0.2)',
+              backgroundColor: 'rgba(37,99,235,0.04)',
+            }}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4" style={{ color: '#2563EB' }} />
+                  <span className="text-xs font-bold uppercase tracking-widest" style={{ color: '#2563EB' }}>
                     Pay Gas With
                   </span>
                 </div>
-                
-                <div className="flex items-center gap-3 bg-white/5 p-1 rounded-2xl border border-white/10 group/gas-container">
+                <div className="flex items-center gap-3">
                   <div className="relative" ref={gasDropdownRef}>
                     <button
                       onClick={() => setState(prev => ({ ...prev, isRegistering: !prev.isRegistering }))}
-                      className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-purple-800 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-lg transition-all hover:shadow-purple-500/20 active:scale-95 whitespace-nowrap"
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl font-bold text-xs transition-all hover:opacity-80 active:scale-95"
+                      style={{
+                        background: 'linear-gradient(135deg, #2563EB, #1D4ED8)',
+                        color: 'white',
+                        boxShadow: '0 4px 12px rgba(37,99,235,0.3)',
+                      }}
                     >
                       {state.selectedGasToken?.logoUrl ? (
                          <img 
@@ -823,7 +829,7 @@ export function SwapInterface() {
                                     onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                                   />
                                 ) : (
-                                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-[10px] font-bold text-white">{t.symbol[0]}</div>
+                                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white" style={{ background: 'linear-gradient(135deg, #2563EB, #1D4ED8)' }}>{t.symbol[0]}</div>
                                 )}
                                 <div className="text-left">
                                    <div className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{t.symbol}</div>
@@ -831,23 +837,18 @@ export function SwapInterface() {
                                 </div>
                              </div>
                              {t.symbol === state.selectedGasToken?.symbol && (
-                               <div className="w-1.5 h-1.5 rounded-full bg-purple-500 flex-shrink-0" />
+                               <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: '#2563EB' }} />
                              )}
                            </button>
                          ))}
                        </div>
                     )}
                   </div>
-                  
-                  <div className="h-6 w-px bg-white/10 mx-1" />
-                  
-                  <div className="flex flex-col items-end pr-3">
-                    <span className="text-[9px] uppercase tracking-widest font-black opacity-50" style={{ color: 'var(--text-secondary)' }}>
-                      Gas Fee
-                    </span>
-                    <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400">
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>Fee</div>
+                    <div className="text-xs font-mono font-bold" style={{ color: '#2563EB' }}>
                       {state.gasFee ? `${state.gasFee} ${state.selectedGasToken?.symbol}` : '—'}
-                    </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -882,7 +883,12 @@ export function SwapInterface() {
               <button
                 onClick={handleSwap}
                 disabled={!stacksConnected || state.isProcessing || !state.inputAmount || !state.outputAmount || isInsufficient}
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-4 rounded-2xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-2xl shadow-purple-500/30 dark:shadow-purple-500/50 hover:shadow-purple-500/50 dark:hover:shadow-purple-500/70 hover:scale-[1.02] active:scale-[0.98]"
+                className="w-full mt-5 font-bold py-4 rounded-2xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              style={{
+                background: 'linear-gradient(135deg, #2563EB, #1D4ED8)',
+                color: 'white',
+                boxShadow: '0 8px 24px rgba(37,99,235,0.35)',
+              }}
               >
                 {state.isProcessing ? (
                   <>
@@ -911,21 +917,17 @@ export function SwapInterface() {
           })()}
         </div>
 
-        {/* Info Footer */}
-        <div className="mt-6 pt-6 text-xs text-center space-y-1" style={{
-          borderTop: `1px solid var(--border-color)`,
-          color: 'var(--text-secondary)'
-        }}>
-          <div className="flex items-center justify-center gap-8 opacity-70">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-              AMM Protocol
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-              L2 Settlement
-            </span>
-          </div>
+        {/* Footer */}
+        <div className="mt-6 pt-5 flex items-center justify-center gap-6 text-[10px] font-semibold uppercase tracking-widest"
+          style={{ borderTop: '1px solid var(--border-color)', color: 'var(--text-secondary)', opacity: 0.6 }}>
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            AMM Protocol
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+            L2 Settlement
+          </span>
         </div>
       </div>
     </div>

@@ -477,16 +477,16 @@ export function BridgeInterface() {
             Cross-Chain Bridge
           </h2>
           <div className="text-xs px-3 py-1.5 rounded-full font-semibold" style={{
-            backgroundColor: 'rgba(139, 92, 246, 0.1)',
-            color: '#8B5CF6',
-            border: '1px solid rgba(139, 92, 246, 0.2)'
+            backgroundColor: 'rgba(37,99,235,0.08)',
+            color: '#2563EB',
+            border: '1px solid rgba(37,99,235,0.2)'
           }}>
             {state.direction === 'eth-to-stacks' ? 'ETH → Stacks' : 'Stacks → ETH'}
           </div>
         </div>
 
         {/* From Section */}
-        <div className="rounded-2xl p-6 hover:border-purple-300 dark:hover:border-purple-700 transition-all duration-300" style={{
+        <div className="rounded-2xl p-6 transition-all duration-300" style={{
           border: `1px solid var(--border-color)`,
           backgroundColor: 'var(--bg-surface)'
         }}>
@@ -524,7 +524,7 @@ export function BridgeInterface() {
               style={{ color: 'var(--text-primary)' }}
               disabled={state.isProcessing}
             />
-            <div className="flex items-center gap-3 bg-purple-600 dark:bg-purple-600 px-5 py-3 rounded-2xl shadow-lg shadow-purple-500/50 flex-shrink-0">
+            <div className="flex items-center gap-3 px-5 py-3 rounded-2xl flex-shrink-0" style={{ background: 'linear-gradient(135deg, #2563EB, #1D4ED8)', boxShadow: '0 8px 20px rgba(37,99,235,0.3)' }}>
                <div className="w-5 h-5 rounded-full bg-white/30 flex items-center justify-center text-[10px] font-bold text-white">
                  {sourceToken[0]}
                </div>
@@ -533,7 +533,8 @@ export function BridgeInterface() {
           </div>
           <button
             onClick={() => setState(prev => ({ ...prev, amount: sourceBalance }))}
-            className="text-xs text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 mt-4 font-bold transition-colors"
+            className="text-xs mt-4 font-bold transition-opacity hover:opacity-70"
+            style={{ color: '#2563EB' }}
             disabled={state.isProcessing}
           >
             MAX
@@ -545,7 +546,7 @@ export function BridgeInterface() {
           <button
             onClick={switchDirection}
             disabled={state.isProcessing}
-            className="rounded-full p-3 transition-all disabled:opacity-50 hover:border-purple-600 dark:hover:border-purple-400 shadow-lg"
+            className="rounded-full p-2.5 transition-all disabled:opacity-50 hover:scale-110 active:scale-95"
             style={{
               backgroundColor: 'var(--bg-surface)',
               border: `2px solid var(--border-color)`
@@ -567,7 +568,7 @@ export function BridgeInterface() {
             <div className="flex-1 text-4xl font-mono min-w-0" style={{ color: 'var(--text-secondary)' }}>
               {state.amount || '0.00'}
             </div>
-            <div className="flex items-center gap-3 bg-blue-600 dark:bg-blue-600 px-5 py-3 rounded-2xl shadow-lg shadow-blue-500/50 flex-shrink-0">
+            <div className="flex items-center gap-3 px-5 py-3 rounded-2xl flex-shrink-0" style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
                <div className="w-5 h-5 rounded-full bg-white/30 flex items-center justify-center text-[10px] font-bold text-white">
                  {destToken[0]}
                </div>
@@ -596,8 +597,11 @@ export function BridgeInterface() {
               </div>
               <button
                 onClick={() => setState(prev => ({ ...prev, gaslessMode: !prev.gaslessMode }))}
-                className={`relative w-14 h-7 rounded-full transition-all duration-300 ${state.gaslessMode ? 'bg-green-600 shadow-lg shadow-green-500/20' : 'bg-gray-200 dark:bg-gray-700'
-                  }`}
+                className="relative w-14 h-7 rounded-full transition-all duration-300"
+                style={{
+                  backgroundColor: state.gaslessMode ? '#2563EB' : undefined,
+                  boxShadow: state.gaslessMode ? '0 4px 12px rgba(37,99,235,0.4)' : undefined,
+                }}
                 disabled={state.isProcessing}
               >
                 <div
@@ -678,9 +682,10 @@ export function BridgeInterface() {
           disabled={!isConnected || state.isProcessing || !state.amount || !!validateAmount(state.amount)}
           className="w-full py-5 rounded-2xl font-bold text-lg transition-all vellum-shadow disabled:opacity-50 disabled:cursor-not-allowed transform hover:-translate-y-1 active:translate-y-0"
           style={{
-            background: state.isProcessing ? 'var(--bg-card)' : 'linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%)',
+            background: state.isProcessing ? 'var(--bg-surface)' : 'linear-gradient(135deg, #2563EB, #1D4ED8)',
             color: 'white',
-            border: state.isProcessing ? '1px solid var(--border-color)' : 'none'
+            border: state.isProcessing ? '1px solid var(--border-color)' : 'none',
+            boxShadow: state.isProcessing ? 'none' : '0 8px 24px rgba(37,99,235,0.35)',
           }}
         >
           {state.isProcessing ? (
@@ -711,7 +716,7 @@ export function BridgeInterface() {
           color: 'var(--text-secondary)'
         }}>
           <p className="flex items-center justify-center gap-2">
-            <span className="w-1.5 h-1.5 bg-purple-600 dark:bg-purple-400 rounded-full dark:animate-pulse-glow animate-slide-progress"></span>
+            <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: '#3B82F6' }}></span>
             Circle xReserve • 5-10 min confirmation
           </p>
           <p>Secure & trustless • Powered by USDC native bridging</p>

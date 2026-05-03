@@ -16,11 +16,22 @@ interface StacksWalletConnectorProps {
   onClose?: () => void;
 }
 
+// Inline SVG icons as data URIs — no external requests, no CORS failures, always visible.
+const WALLET_ICONS: Record<string, string> = {
+  okx: `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23000'/><rect x='10' y='10' width='35' height='35' rx='4' fill='white'/><rect x='55' y='10' width='35' height='35' rx='4' fill='white'/><rect x='10' y='55' width='35' height='35' rx='4' fill='white'/><rect x='55' y='55' width='35' height='35' rx='4' fill='white'/></svg>`,
+
+  xverse: `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23EE7A30'/><text x='50' y='68' font-size='52' font-family='Arial Black,sans-serif' font-weight='900' text-anchor='middle' fill='white'>X</text></svg>`,
+
+  leather: `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231A1A1A'/><rect x='20' y='38' width='60' height='8' rx='4' fill='%23C8A96E'/><rect x='20' y='54' width='45' height='8' rx='4' fill='%23C8A96E'/><rect x='20' y='22' width='60' height='8' rx='4' fill='%23C8A96E'/></svg>`,
+
+  hiro: `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%235546FF'/><text x='50' y='68' font-size='42' font-family='Arial,sans-serif' font-weight='700' text-anchor='middle' fill='white'>H</text></svg>`,
+};
+
 interface WalletOption {
   id: StacksWalletType;
   name: string;
   description: string;
-  icon: string;         // SVG path or URL
+  icon: string;
   installUrl: string;
   detected: boolean;
 }
@@ -36,7 +47,7 @@ function useDetectedWallets(): WalletOption[] {
         id: 'okx',
         name: 'OKX Wallet',
         description: 'Multi-chain wallet by OKX',
-        icon: 'https://static.okx.com/cdn/assets/imgs/247/58E63FEA47A2B7D7.png',
+        icon: WALLET_ICONS.okx,
         installUrl: 'https://www.okx.com/web3',
         detected: !!(win.okxwallet?.stacks || win.okxwallet?.bitcoin),
       },
@@ -44,7 +55,7 @@ function useDetectedWallets(): WalletOption[] {
         id: 'xverse',
         name: 'Xverse',
         description: 'Bitcoin & Stacks wallet',
-        icon: 'https://raw.githubusercontent.com/secretkeylabs/xverse-web-extension/main/src/assets/img/xverse-logo.svg',
+        icon: WALLET_ICONS.xverse,
         installUrl: 'https://www.xverse.app',
         detected: !!(win.XverseProviders?.StacksProvider || win.StacksProvider),
       },
@@ -52,7 +63,7 @@ function useDetectedWallets(): WalletOption[] {
         id: 'leather',
         name: 'Leather',
         description: 'Bitcoin-native Stacks wallet',
-        icon: 'https://leather.io/favicon.ico',
+        icon: WALLET_ICONS.leather,
         installUrl: 'https://leather.io',
         detected: !!(win.LeatherProvider || win.HiroWalletProvider),
       },
@@ -248,10 +259,7 @@ export function StacksWalletConnector({ onClose }: StacksWalletConnectorProps) {
                       <img
                         src={wallet.icon}
                         alt={wallet.name}
-                        className="w-7 h-7 object-contain"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
+                        className="w-11 h-11 object-contain rounded-xl"
                       />
                     </div>
 

@@ -400,6 +400,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         const win = window as any;
         const okxStacks = win.okxwallet?.stacks ?? win.okxwallet?.bitcoin;
         if (!okxStacks) {
+          setState(prev => ({ ...prev, isConnecting: false }));
           throw new Error('OKX Wallet not detected. Please install the OKX browser extension.');
         }
 
@@ -416,18 +417,32 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           );
           address = stxEntry?.address ?? null;
           publicKey = stxEntry?.publicKey ?? '';
-        } catch {
+        } catch (err: any) {
+          // User cancelled or request failed — reset state cleanly
+          setState(prev => ({ ...prev, isConnecting: false }));
+          const msg = err?.message?.toLowerCase() ?? '';
+          if (msg.includes('cancel') || msg.includes('reject') || msg.includes('denied') || msg.includes('user refused')) {
+            throw new Error('Cancelled');
+          }
           // Fallback: connect() style
           try {
             const result = await okxStacks.connect?.();
             address = result?.address ?? result?.stxAddress ?? null;
             publicKey = result?.publicKey ?? '';
-          } catch {
+          } catch (connectErr: any) {
+            setState(prev => ({ ...prev, isConnecting: false }));
+            const m = connectErr?.message?.toLowerCase() ?? '';
+            if (m.includes('cancel') || m.includes('reject') || m.includes('denied') || m.includes('user refused')) {
+              throw new Error('Cancelled');
+            }
             throw new Error('OKX Wallet connection failed. Please try again.');
           }
         }
 
-        if (!address) throw new Error('No Stacks address returned from OKX Wallet.');
+        if (!address) {
+          setState(prev => ({ ...prev, isConnecting: false }));
+          throw new Error('No Stacks address returned from OKX Wallet.');
+        }
 
         setState(prev => ({
           ...prev,
@@ -441,50 +456,111 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return address;
       }
 
-      // ── Xverse / Leather / Hiro: standard @stacks/connect flow ───────────
-      const { request: stacksRequest, connect: stacksConnect } = await import('@stacks/connect');
+      // ── Leather / Xverse / Hiro: target each wallet's native provider ─────
+      // Each wallet has a different injection point. We call them directly so
+      // our custom picker never triggers a second built-in wallet-selection modal.
 
-      // connect() triggers wallet selection + returns addresses with public keys
-      const response = await stacksConnect({ forceWalletSelect: true }) as any;
+      let address: string = '';
+      let publicKey: string = '';
 
-      // response.addresses is an array of { address, publicKey }
-      const addresses = response?.addresses || [];
-      const stxEntry = addresses.find((a: any) =>
-        a.address?.startsWith('SP') || a.address?.startsWith('ST')
-      );
-
-      if (!stxEntry?.address) throw new Error('No Stacks address returned from wallet');
-
-      const address: string = stxEntry.address;
-      const publicKey: string = stxEntry.publicKey || '';
-
-      console.log('Stacks Wallet Connected:', { address, hasPublicKey: !!publicKey });
-
-      if (!publicKey) {
-        // Fallback: try stx_getAddresses which explicitly returns publicKey
+      // ── Leather ──────────────────────────────────────────────────────────
+      // Leather exposes window.LeatherProvider with request("getAddresses").
+      // It returns BTC + STX addresses; we pick the STX one by symbol.
+      if (preferredWallet === 'leather') {
+        const win = window as any;
+        const leatherProvider = win.LeatherProvider ?? win.HiroWalletProvider;
+        if (!leatherProvider) {
+          setState(prev => ({ ...prev, isConnecting: false }));
+          throw new Error('Leather wallet not detected. Please install the Leather browser extension.');
+        }
         try {
-          const addrResult = await stacksRequest('stx_getAddresses') as any;
-          const stxAddr = (addrResult?.addresses || []).find((a: any) =>
+          const result = await leatherProvider.request('getAddresses');
+          const addrs: any[] = result?.result?.addresses ?? result?.addresses ?? [];
+          const stxEntry = addrs.find((a: any) =>
+            a.symbol === 'STX' || a.address?.startsWith('SP') || a.address?.startsWith('ST')
+          );
+          if (!stxEntry?.address) throw new Error('No Stacks address returned from Leather.');
+          address = stxEntry.address;
+          publicKey = stxEntry.publicKey ?? '';
+        } catch (err: any) {
+          setState(prev => ({ ...prev, isConnecting: false }));
+          const msg = (err?.message ?? '').toLowerCase();
+          if (msg.includes('cancel') || msg.includes('reject') || msg.includes('denied') || msg.includes('user refused') || msg.includes('cancelled')) {
+            throw new Error('Cancelled');
+          }
+          throw err;
+        }
+      }
+
+      // ── Xverse ───────────────────────────────────────────────────────────
+      // Xverse responds to stx_getAddresses via @stacks/connect request().
+      else if (preferredWallet === 'xverse') {
+        const { request: stacksRequest } = await import('@stacks/connect');
+        try {
+          const result = await stacksRequest('stx_getAddresses') as any;
+          const addrs: any[] = result?.addresses ?? [];
+          const stxEntry = addrs.find((a: any) =>
             a.address?.startsWith('SP') || a.address?.startsWith('ST')
           );
-          if (stxAddr?.publicKey) {
-            console.log('Public key fetched via stx_getAddresses');
-            setState(prev => ({
-              ...prev,
-              stacksAddress: address,
-              stacksPublicKey: stxAddr.publicKey,
-              stacksConnected: true,
-              stacksWalletType: preferredWallet || 'leather',
-              isConnecting: false,
-            }));
-            fetchStacksBalances(address);
-            return address;
+          if (!stxEntry?.address) throw new Error('No Stacks address returned from Xverse.');
+          address = stxEntry.address;
+          publicKey = stxEntry.publicKey ?? '';
+        } catch (err: any) {
+          setState(prev => ({ ...prev, isConnecting: false }));
+          const msg = (err?.message ?? '').toLowerCase();
+          if (msg.includes('cancel') || msg.includes('reject') || msg.includes('denied') || msg.includes('user refused') || msg.includes('cancelled')) {
+            throw new Error('Cancelled');
           }
-        } catch (e) {
-          console.warn('stx_getAddresses fallback failed:', e);
+          // Fallback: open Xverse popup without the @stacks/connect picker
+          try {
+            const { connect: stacksConnect } = await import('@stacks/connect');
+            const response = await stacksConnect({ forceWalletSelect: false }) as any;
+            const addrs2: any[] = response?.addresses ?? [];
+            const entry = addrs2.find((a: any) =>
+              a.address?.startsWith('SP') || a.address?.startsWith('ST')
+            );
+            if (!entry?.address) throw new Error('No Stacks address returned from Xverse.');
+            address = entry.address;
+            publicKey = entry.publicKey ?? '';
+          } catch (fallbackErr: any) {
+            setState(prev => ({ ...prev, isConnecting: false }));
+            const m = (fallbackErr?.message ?? '').toLowerCase();
+            if (m.includes('cancel') || m.includes('reject') || m.includes('denied') || m.includes('user refused') || m.includes('cancelled')) {
+              throw new Error('Cancelled');
+            }
+            throw fallbackErr;
+          }
         }
-        console.warn('Public key not available — sponsored transactions may not work');
       }
+
+      // ── Hiro / generic fallback ───────────────────────────────────────────
+      else {
+        const { request: stacksRequest } = await import('@stacks/connect');
+        try {
+          const result = await stacksRequest('stx_getAddresses') as any;
+          const addrs: any[] = result?.addresses ?? [];
+          const stxEntry = addrs.find((a: any) =>
+            a.address?.startsWith('SP') || a.address?.startsWith('ST')
+          );
+          if (!stxEntry?.address) throw new Error('No Stacks address returned from wallet.');
+          address = stxEntry.address;
+          publicKey = stxEntry.publicKey ?? '';
+        } catch (err: any) {
+          setState(prev => ({ ...prev, isConnecting: false }));
+          const msg = (err?.message ?? '').toLowerCase();
+          if (msg.includes('cancel') || msg.includes('reject') || msg.includes('denied') || msg.includes('user refused') || msg.includes('cancelled')) {
+            throw new Error('Cancelled');
+          }
+          throw err;
+        }
+      }
+
+      if (!address) {
+        setState(prev => ({ ...prev, isConnecting: false }));
+        throw new Error('No Stacks address returned from wallet.');
+      }
+
+      console.log('Stacks Wallet Connected:', { address, wallet: preferredWallet, hasPublicKey: !!publicKey });
 
       setState(prev => ({
         ...prev,

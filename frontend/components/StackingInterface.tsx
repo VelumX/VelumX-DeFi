@@ -153,7 +153,7 @@ export function StackingInterface() {
             <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>Powered by StackingDAO</p>
           </div>
           <a href="https://app.stackingdao.com" target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-1 text-xs text-purple-500 hover:text-purple-400">
+            className="flex items-center gap-1 text-xs hover:opacity-70 transition-opacity" style={{ color: '#2563EB' }}>
             App <ExternalLink className="w-3 h-3" />
           </a>
         </div>
@@ -161,12 +161,12 @@ export function StackingInterface() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-3 mb-6">
           {[
-            { label: 'APY', value: apy, color: 'text-green-500' },
-            { label: 'stSTX/STX', value: stxPerStSTX.toFixed(4), color: 'text-purple-500' },
-            { label: 'Your stSTX', value: stSTXBalance.toFixed(4), color: 'text-blue-500' },
+            { label: 'APY', value: apy, color: '' },
+            { label: 'stSTX/STX', value: stxPerStSTX.toFixed(4), color: '' },
+            { label: 'Your stSTX', value: stSTXBalance.toFixed(4), color: '' },
           ].map(s => (
             <div key={s.label} className="rounded-xl p-3 text-center" style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
-              <div className={`text-sm font-bold font-mono ${s.color}`}>{s.value}</div>
+              <div className="text-sm font-bold font-mono" style={{ color: '#2563EB' }}>{s.value}</div>
               <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>{s.label}</div>
             </div>
           ))}
@@ -176,8 +176,8 @@ export function StackingInterface() {
         <div className="flex rounded-xl overflow-hidden mb-6" style={{ border: '1px solid var(--border-color)' }}>
           {(['deposit', 'withdraw'] as Mode[]).map(m => (
             <button key={m} onClick={() => { setMode(m); setAmount(''); setError(null); setSuccess(null); }}
-              className={`flex-1 py-2.5 text-sm font-bold transition-all ${mode === m ? 'bg-purple-600 text-white' : ''}`}
-              style={mode !== m ? { color: 'var(--text-secondary)' } : {}}>
+              className={`flex-1 py-2.5 text-sm font-bold transition-all ${mode === m ? 'text-white' : ''}`}
+              style={mode === m ? { background: 'linear-gradient(135deg, #2563EB, #1D4ED8)' } : { color: 'var(--text-secondary)' }}>
               {m === 'deposit' ? 'Deposit STX' : 'Instant Unstack'}
             </button>
           ))}
@@ -191,14 +191,14 @@ export function StackingInterface() {
             </span>
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
               Balance: <span className="font-mono font-bold" style={{ color: 'var(--text-primary)' }}>{inputBalance.toFixed(4)}</span>
-              <button onClick={() => setAmount(inputBalance.toFixed(6))} className="ml-2 text-purple-500 text-[10px] font-bold uppercase hover:text-purple-400">MAX</button>
+              <button onClick={() => setAmount(inputBalance.toFixed(6))} className="ml-2 text-[10px] font-bold uppercase hover:opacity-70 transition-opacity" style={{ color: '#2563EB' }}>MAX</button>
             </span>
           </div>
           <div className="flex items-center gap-3">
             <input type="number" value={amount} onChange={e => { setAmount(e.target.value); setError(null); }}
               placeholder="0.00" className="flex-1 bg-transparent text-3xl font-mono outline-none placeholder:opacity-30"
               style={{ color: 'var(--text-primary)' }} disabled={isProcessing} />
-            <div className="px-4 py-2 rounded-xl bg-purple-600 text-white font-bold text-sm">{inputSymbol}</div>
+            <div className="px-4 py-2 rounded-xl font-bold text-sm text-white" style={{ background: 'linear-gradient(135deg, #2563EB, #1D4ED8)' }}>{inputSymbol}</div>
           </div>
         </div>
 
@@ -215,7 +215,7 @@ export function StackingInterface() {
             <span className="flex-1 text-3xl font-mono" style={{ color: 'var(--text-primary)', opacity: estimatedOutput === '0' ? 0.3 : 1 }}>
               {estimatedOutput}
             </span>
-            <div className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold text-sm">{outputSymbol}</div>
+            <div className="px-4 py-2 rounded-xl font-bold text-sm text-white" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>{outputSymbol}</div>
           </div>
         </div>
 
@@ -242,11 +242,16 @@ export function StackingInterface() {
           return (
             <button onClick={handleSubmit}
               disabled={!stacksConnected || isProcessing || !amount || n <= 0 || insufficient}
-              className={`w-full mt-6 font-bold py-4 rounded-2xl transition-all disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-xl ${
-                insufficient
-                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                  : 'bg-purple-600 hover:bg-purple-700 text-white shadow-purple-500/20 disabled:opacity-50'
-              }`}>
+              className="w-full mt-6 font-bold py-4 rounded-2xl transition-all disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"
+              style={insufficient ? {
+                backgroundColor: 'rgba(37,99,235,0.08)',
+                color: '#2563EB',
+                border: '1px solid rgba(37,99,235,0.2)',
+              } : {
+                background: 'linear-gradient(135deg, #2563EB, #1D4ED8)',
+                color: 'white',
+                boxShadow: '0 8px 24px rgba(37,99,235,0.35)',
+              }}>
               {isProcessing
                 ? <><Loader2 className="w-5 h-5 animate-spin" /> Processing...</>
                 : <><TrendingUp className="w-5 h-5" /> {buttonLabel}</>}
