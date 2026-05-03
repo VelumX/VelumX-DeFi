@@ -83,25 +83,9 @@ const nextConfig: NextConfig = {
     ],
   },
 
-  // Webpack optimisations
-  webpack(config, { isServer }) {
-    // Tree-shake unused lucide-react icons
-    config.resolve.alias = {
-      ...config.resolve.alias,
-    };
-
-    if (!isServer) {
-      // Reduce client bundle by not bundling server-only modules
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        net: false,
-        tls: false,
-      };
-    }
-
-    return config;
-  },
+  // Empty turbopack config — satisfies Next.js 16's Turbopack-first build
+  // and silences the "webpack config with no turbopack config" error.
+  turbopack: {},
 };
 
 export default nextConfig;
