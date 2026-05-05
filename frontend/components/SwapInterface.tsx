@@ -659,28 +659,62 @@ export function SwapInterface() {
           return match?.tokenId || token.address;
         };
 
-        const txid = await executeBitflowGaslessSwap({
-          userAddress: stacksAddress,
-          userPublicKey: stacksPublicKey || undefined,
-          tokenIn: state.inputToken.address,
-          tokenInId: getTokenId(state.inputToken),
-          tokenOut: state.outputToken.address,
-          tokenOutId: getTokenId(state.outputToken),
-          amountIn: state.inputAmount,
-          tokenInDecimals: state.inputToken.decimals,
-          tokenOutDecimals: state.outputToken.decimals,
-          feeToken: state.selectedGasToken?.address || '',
-          sponsorshipPolicy: sponsorshipPolicy,
-          quoteResult: state.quote ? {
-            bestRoute: state.quote.bestRoute,
-            allRoutes: state.quote.allRoutes ?? [],
-            inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
-          } : undefined,
-          feeEstimate: state.feeEstimate,
-          onProgress: (step) => {
-            setState(prev => ({ ...prev, success: step }));
+        let txid: string;
+        let usedDirectSwap = false;
+
+        try {
+          txid = await executeBitflowGaslessSwap({
+            userAddress: stacksAddress,
+            userPublicKey: stacksPublicKey || undefined,
+            tokenIn: state.inputToken.address,
+            tokenInId: getTokenId(state.inputToken),
+            tokenOut: state.outputToken.address,
+            tokenOutId: getTokenId(state.outputToken),
+            amountIn: state.inputAmount,
+            tokenInDecimals: state.inputToken.decimals,
+            tokenOutDecimals: state.outputToken.decimals,
+            feeToken: state.selectedGasToken?.address || '',
+            sponsorshipPolicy: sponsorshipPolicy,
+            quoteResult: state.quote ? {
+              bestRoute: state.quote.bestRoute,
+              allRoutes: state.quote.allRoutes ?? [],
+              inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
+            } : undefined,
+            feeEstimate: state.feeEstimate,
+            onProgress: (step) => {
+              setState(prev => ({ ...prev, success: step }));
+            }
+          });
+        } catch (gaslessErr: any) {
+          // If the route isn't paymaster-compatible, fall back to a direct
+          // (non-gasless) swap so the user isn't blocked.
+          if (gaslessErr?.message?.includes('not supported by the paymaster') ||
+              gaslessErr?.message?.includes('No gasless route')) {
+            usedDirectSwap = true;
+            const bitflow = getBitflowSDK();
+            const bestRoute = state.quote?.bestRoute;
+            if (!bestRoute) throw new Error('No valid swap route found. Please refresh the quote.');
+            const selectedRoute = (bestRoute as any).route || bestRoute;
+            const swapParams = await bitflow.getSwapParams({
+              route: selectedRoute,
+              amount: parseFloat(state.inputAmount),
+              tokenXDecimals: state.inputToken.decimals,
+              tokenYDecimals: state.outputToken.decimals,
+            }, stacksAddress, state.slippage / 100);
+            const { request: stacksRequest } = await import('@stacks/connect');
+            const result = await stacksRequest('stx_callContract', {
+              contract: `${swapParams.contractAddress}.${swapParams.contractName}`,
+              functionName: swapParams.functionName,
+              functionArgs: swapParams.functionArgs,
+              network: 'mainnet',
+              postConditionMode: 'allow',
+              postConditions: [],
+            });
+            txid = (result as any).txid;
+          } else {
+            throw gaslessErr;
           }
-        });
+        }
 
         setState(prev => ({
           ...prev,

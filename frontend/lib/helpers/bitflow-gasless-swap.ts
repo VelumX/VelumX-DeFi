@@ -216,6 +216,9 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     return isPaymasterCompatible(contract);
   });
 
+  console.log('[VelumX] validRoutes contracts:', validRoutes.map((r: any) => r.swapData?.contract));
+  console.log('[VelumX] paymasterRoutes contracts:', paymasterRoutes.map((r: any) => r.swapData?.contract));
+
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
   // Helper: optional uint — someCV(uintCV(n)) if n is defined, else noneCV()
