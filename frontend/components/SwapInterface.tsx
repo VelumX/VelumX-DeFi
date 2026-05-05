@@ -126,6 +126,8 @@ function translateSwapError(message: string): string {
     return 'Wallet verification required. Please disconnect and reconnect your wallet.';
   if (m.includes('relayer address not available'))
     return 'Gasless service unavailable. Try disabling gasless mode.';
+  if (m.includes('no gasless route') || m.includes('not supported by the paymaster'))
+    return 'This token pair cannot be swapped in gasless mode. Please disable gasless mode to swap directly.';
   if (m.includes('no amm pool') || m.includes('no liquidity') || m.includes('no route'))
     return 'No liquidity found for this token pair.';
   if (m.includes('slippage') || m.includes('min-dy') || m.includes('min-dz') || m.includes('min-dw'))
@@ -723,10 +725,6 @@ export function SwapInterface() {
         // getParallelQuote returns { route: SelectedSwapRoute, swapData, ... }
         // but the SDK's getSwapParams expects a SelectedSwapRoute directly.
         const selectedRoute = (bestRoute as any).route || bestRoute;
-        // Debug: log decimal params
-        const _sr = selectedRoute.swapData?.parameters || {};
-        const _ds = Object.entries(_sr).filter(([, v]: [string, any]) => typeof v === 'number' && !Number.isInteger(v) || typeof v === 'string' && v.includes('.') && !isNaN(Number(v)));
-        if (_ds.length > 0) console.error('[VelumX] DECIMAL in non-gasless selectedRoute:', JSON.stringify(_ds));
 
         const swapParams = await bitflow.getSwapParams({
           route: selectedRoute,

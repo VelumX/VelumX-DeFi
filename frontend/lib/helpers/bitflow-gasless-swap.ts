@@ -218,17 +218,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
-  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
-
-  // Helper: build a contractPrincipalCV from a "ADDR.name" string
-  const toContractCV = (principal: string | undefined) => {
-    if (!principal || !principal.includes('.')) {
-      throw new Error(`Invalid contract principal: "${principal}". Expected "ADDRESS.name" format.`);
-    }
-    const [addr, name] = principal.split('.');
-    return contractPrincipalCV(addr, name);
-  };
-
   // Helper: optional uint — someCV(uintCV(n)) if n is defined, else noneCV()
   const toOptUint = (n: bigint | number | string | undefined) =>
     n !== undefined && n !== null ? someCV(uintCV(n)) : noneCV();
@@ -243,8 +232,24 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   // 3. Build VelumX Contract Call based on Policy
   onProgress?.('Preparing VelumX transaction...');
-  
-  const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
+
+  // isDeveloperSponsoring is determined solely by the fee estimate policy.
+  // We cannot force DEVELOPER_SPONSORS — it requires the API key to have that policy.
+  const isDeveloperSponsoring = (
+    estimate.policy === 'DEVELOPER_SPONSORS' ||
+    params.sponsorshipPolicy === 'DEVELOPER_SPONSORS'
+  );
+
+  // If USER_PAYS but no paymaster-compatible route exists, fail early with a
+  // clear message rather than attempting an incompatible paymaster call.
+  // xyk-swap-helper uses a unique tuple-based signature the paymaster doesn't support.
+  if (!isDeveloperSponsoring && paymasterRoutes.length === 0) {
+    throw new Error(
+      'No gasless route available for this token pair. ' +
+      'The available liquidity pool is not supported by the paymaster. ' +
+      'Please disable gasless mode to swap directly.'
+    );
+  }
 
   // Guard: USER_PAYS requires a valid relayer address to receive the fee token
   if (!isDeveloperSponsoring && !relayerAddress) {
@@ -253,6 +258,17 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   
   let txOptions: any;
   
+  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
+
+  // Helper: build a contractPrincipalCV from a "ADDR.name" string
+  const toContractCV = (principal: string | undefined) => {
+    if (!principal || !principal.includes('.')) {
+      throw new Error(`Invalid contract principal: "${principal}". Expected "ADDRESS.name" format.`);
+    }
+    const [addr, name] = principal.split('.');
+    return contractPrincipalCV(addr, name);
+  };
+
   if (isDeveloperSponsoring) {
     // DEVELOPER_SPONSORS: Use the Bitflow SDK's getSwapParams to build function args correctly,
     // then override the contract address with the resolved mainnet deployer.
@@ -309,19 +325,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
             contract: `${resolvedContractAddress}.${resolvedContractName}`,
           },
         };
-
-        // Debug: log all swapData parameters to find the decimal source
-        const _params = patchedRoute.swapData?.parameters || {};
-        const _decimalKeys = Object.entries(_params).filter(([, v]) =>
-          typeof v === 'number' && !Number.isInteger(v) ||
-          typeof v === 'string' && v.includes('.') && !isNaN(Number(v))
-        );
-        if (_decimalKeys.length > 0) {
-          console.error('[VelumX] DECIMAL PARAMS FOUND in patchedRoute:', JSON.stringify(_decimalKeys));
-          console.error('[VelumX] Full swapData.parameters:', JSON.stringify(_params, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
-          console.error('[VelumX] candidateRoute.swapData:', JSON.stringify((candidateRoute as any).swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
-          console.error('[VelumX] candidateRoute.route?.swapData:', JSON.stringify((candidateRoute as any).route?.swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
-        }
 
         const swapParams = await bitflow.getSwapParams(
           {
@@ -705,10 +708,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ...((bestRoute as any).route || bestRoute),
         swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
       };
-      // Debug: log decimal params
-      const _p2 = patchedRoute.swapData?.parameters || {};
-      const _d2 = Object.entries(_p2).filter(([, v]) => typeof v === 'number' && !Number.isInteger(v) || typeof v === 'string' && v.includes('.') && !isNaN(Number(v)));
-      if (_d2.length > 0) console.error('[VelumX] DECIMAL in stableswap/router patchedRoute:', JSON.stringify(_d2), 'bestRoute.swapData.params:', JSON.stringify((bestRoute as any).swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
       const swapParams = await bitflow.getSwapParams(
         { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
         userAddress,
