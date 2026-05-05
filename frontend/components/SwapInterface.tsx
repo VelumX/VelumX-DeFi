@@ -64,6 +64,8 @@ interface SwapState {
   feeEstimate: any | null;
   /** ALEX quote when ALEX wins the best-route race; null when Bitflow wins */
   alexQuote: import('@/lib/helpers/alex-swap').AlexQuoteResult | null;
+  /** User-selected route override — null means use bestRoute */
+  selectedRoute: any | null;
 }
 
 // Maps known token symbols/IDs (as stored in developer dashboard) to their
@@ -264,6 +266,7 @@ export function SwapInterface() {
     isRegistering: false,
     feeEstimate: null,
     alexQuote: null,
+    selectedRoute: null,
   });
 
   // Auto-select default tokens once the shared store has tokens
@@ -463,6 +466,7 @@ export function SwapInterface() {
           ...prev,
           outputAmount,
           alexQuote: null,
+          selectedRoute: null, // reset user selection on new quote
           quote: {
             amountOut: outputAmount,
             priceImpact: '0.30',
@@ -676,8 +680,10 @@ export function SwapInterface() {
             feeToken: state.selectedGasToken?.address || '',
             sponsorshipPolicy: sponsorshipPolicy,
             quoteResult: state.quote ? {
-              bestRoute: state.quote.bestRoute,
-              allRoutes: state.quote.allRoutes ?? [],
+              bestRoute: state.selectedRoute ?? state.quote.bestRoute,
+              allRoutes: state.selectedRoute
+                ? [state.selectedRoute]
+                : (state.quote.allRoutes ?? []),
               inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
             } : undefined,
             feeEstimate: state.feeEstimate,
@@ -750,7 +756,7 @@ export function SwapInterface() {
         // Use the route stored in our quote state to ensure consistency.
         // bestRoute is a RouteQuote from getParallelQuote — extract the nested
         // SelectedSwapRoute for the SDK's getSwapParams.
-        const bestRoute = state.quote.bestRoute;
+        const bestRoute = state.selectedRoute ?? state.quote.bestRoute;
         if (!bestRoute) throw new Error('No valid swap route found in state. Please refresh the quote.');
 
         const amountIn = parseFloat(state.inputAmount);
@@ -881,7 +887,7 @@ export function SwapInterface() {
             amount={state.inputAmount}
             setAmount={(val: string) => setState(prev => ({ ...prev, inputAmount: val, error: null }))}
             token={state.inputToken}
-            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, outputAmount: '', quote: null, selectedRoute: null, success: null, error: null }))}
             tokens={tokens}
             balance={getBalance(state.inputToken)}
             isProcessing={state.isProcessing}
@@ -912,7 +918,7 @@ export function SwapInterface() {
             amount={state.outputAmount}
             setAmount={() => { }}
             token={state.outputToken}
-            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, outputAmount: '', quote: null, selectedRoute: null, success: null, error: null }))}
             tokens={routableTokenIds.size > 0
               ? tokens.filter(t => {
                   const id = t.tokenId || t.address;
@@ -928,33 +934,78 @@ export function SwapInterface() {
         </div>
 
         <div className="mt-6">
-          {/* Route Display */}
+          {/* Route Selector */}
           {state.quote?.allRoutes && state.quote.allRoutes.length > 0 && (
             <div className="mt-4 rounded-2xl overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>
-              <div className="px-4 py-2 flex items-center gap-2" style={{ backgroundColor: 'var(--bg-primary)' }}>
+              <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: 'var(--bg-primary)' }}>
                 <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: 'var(--text-secondary)' }}>
                   Routes ({state.quote.allRoutes.length})
                 </span>
+                {state.selectedRoute && (
+                  <button
+                    onClick={() => setState(prev => ({
+                      ...prev,
+                      selectedRoute: null,
+                      outputAmount: prev.quote?.bestRoute?.quote?.toFixed(6) ?? prev.outputAmount,
+                    }))}
+                    className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full transition-opacity hover:opacity-70"
+                    style={{ backgroundColor: 'rgba(37,99,235,0.12)', color: '#2563EB' }}
+                  >
+                    Reset to Best
+                  </button>
+                )}
               </div>
               <div className="divide-y" style={{ borderColor: 'var(--border-color)' }}>
                 {state.quote.allRoutes
                   .sort((a: any, b: any) => (b.quote || 0) - (a.quote || 0))
                   .map((route: any, i: number) => {
+                    const effectiveRoute = state.selectedRoute ?? state.quote?.bestRoute;
+                    const isSelected = route === effectiveRoute ||
+                      (route.quote !== null && route.quote === effectiveRoute?.quote &&
+                       JSON.stringify(route.dexPath ?? route.dex_path) ===
+                       JSON.stringify(effectiveRoute?.dexPath ?? (effectiveRoute as any)?.dex_path));
                     const isBest = route === state.quote?.bestRoute ||
                       (route.quote !== null && route.quote === state.quote?.bestRoute?.quote);
                     const dexPath: string[] = route.dexPath || route.dex_path || [];
                     const tokenPath: string[] = route.tokenPath || route.token_path || [];
                     const quoteVal: number | null = route.quote;
+                    const isDisabled = quoteVal === null;
 
                     return (
-                      <div
+                      <button
                         key={i}
-                        className="px-4 py-3 flex items-center justify-between gap-3 transition-colors"
-                        style={{
-                          backgroundColor: isBest ? 'rgba(139,92,246,0.08)' : 'transparent',
+                        disabled={isDisabled}
+                        onClick={() => {
+                          if (isDisabled) return;
+                          setState(prev => ({
+                            ...prev,
+                            selectedRoute: route,
+                            outputAmount: quoteVal!.toFixed(6),
+                          }));
                         }}
+                        className="w-full px-4 py-3 flex items-center justify-between gap-3 transition-colors text-left disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor: isSelected
+                            ? 'rgba(37,99,235,0.10)'
+                            : 'transparent',
+                          opacity: isDisabled ? 0.4 : 1,
+                          cursor: isDisabled ? 'not-allowed' : 'pointer',
+                        }}
+                        onMouseEnter={e => { if (!isDisabled && !isSelected) e.currentTarget.style.backgroundColor = 'rgba(37,99,235,0.04)'; }}
+                        onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
                       >
                         <div className="flex items-center gap-2 flex-wrap min-w-0">
+                          {/* Selected indicator */}
+                          <div
+                            className="w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center"
+                            style={{
+                              borderColor: isSelected ? '#2563EB' : 'var(--border-color)',
+                              backgroundColor: isSelected ? '#2563EB' : 'transparent',
+                            }}
+                          >
+                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                          </div>
+
                           {isBest && (
                             <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0"
                               style={{ backgroundColor: 'rgba(37,99,235,0.12)', color: '#2563EB' }}>
@@ -982,10 +1033,10 @@ export function SwapInterface() {
                           )}
                         </div>
                         <span className="text-xs font-bold shrink-0"
-                          style={{ color: isBest ? '#2563EB' : 'var(--text-primary)' }}>
+                          style={{ color: isSelected ? '#2563EB' : 'var(--text-primary)' }}>
                           {quoteVal !== null ? quoteVal.toFixed(4) : '—'}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
               </div>

@@ -176,7 +176,9 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // Velar routers use swap-helper-a/b/c/d with tuple trait args — not compatible
   // with bitflow-router-trait, but the paymaster has dedicated hardcoded functions
   // for them (swap-velar-xyk-router-* and swap-velar-stableswap-router-*).
+  // The paymaster hardcodes v-1-4 — remap older versions to it.
   const VELAR_XYK_ROUTER = 'router-xyk-velar-v-1-4';
+  const VELAR_XYK_ROUTER_ALIASES = new Set(['router-xyk-velar-v-1-2', 'router-xyk-velar-v-1-3', 'router-xyk-velar-v-1-4']);
   const VELAR_SS_ROUTER  = 'router-stableswap-velar-v-1-5';
 
   const isPaymasterCompatible = (contractStr: string): boolean => {
@@ -188,8 +190,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const resolvedName = resolved.split('.')[1] || '';
     // Stableswap pools always implement the trait
     if (resolvedName.startsWith('stableswap-')) return true;
-    // Velar routers have dedicated paymaster wrapper functions
-    if (resolvedName === VELAR_XYK_ROUTER || resolvedName === VELAR_SS_ROUTER) return true;
+    // Velar routers (all versions) have dedicated paymaster wrapper functions
+    if (VELAR_XYK_ROUTER_ALIASES.has(resolvedName) || resolvedName === VELAR_SS_ROUTER) return true;
     // Only allow known-compatible routers
     if (PAYMASTER_COMPATIBLE_ROUTERS.has(resolvedName)) return true;
     return false;
@@ -215,9 +217,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const contract = (r as any).swapData?.contract || '';
     return isPaymasterCompatible(contract);
   });
-
-  console.log('[VelumX] validRoutes contracts:', validRoutes.map((r: any) => r.swapData?.contract));
-  console.log('[VelumX] paymasterRoutes contracts:', paymasterRoutes.map((r: any) => r.swapData?.contract));
 
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
@@ -388,7 +387,12 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const contractName = resolvedPool.split('.')[1] || '';
     const isStableswap = contractName.startsWith('stableswap-');
-    const isVelarXyk = contractName === VELAR_XYK_ROUTER;
+    // Remap older Velar XYK router versions to v-1-4 — the paymaster hardcodes v-1-4.
+    const isVelarXyk = VELAR_XYK_ROUTER_ALIASES.has(contractName);
+    if (isVelarXyk && contractName !== VELAR_XYK_ROUTER) {
+      // Substitute the canonical v-1-4 address so the paymaster call targets the right contract
+      resolvedPool = resolvedPool.replace(contractName, VELAR_XYK_ROUTER);
+    }
     const isVelarSS  = contractName === VELAR_SS_ROUTER;
     const isReverse  = swapData.function === 'swap-y-for-x';
 
