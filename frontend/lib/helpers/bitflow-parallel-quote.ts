@@ -415,16 +415,21 @@ export async function getParallelQuote(
     const fnDef = abi?.functions?.find((f: any) => f.name === qd.function);
     if (!fnDef) throw new Error(`Function ${qd.function} not found in ABI`);
 
-    // Build params with amount injected
+    // Build params with amount injected.
+    // The Bitflow API sometimes pre-fills input params with a decimal (human-readable)
+    // value instead of null. We must replace any input param that is null OR a
+    // non-integer number (decimal float) — otherwise BigInt() throws a RangeError
+    // when the SDK tries to convert it.
+    const needsAmount = (v: any) => v === null || v === undefined || (typeof v === 'number' && !Number.isInteger(v));
     const p: Record<string, any> = { ...qd.parameters };
-    if ('dx' in p && p.dx === null)                   p.dx = amountScaled;
-    else if ('amount' in p && p.amount === null)       p.amount = amountScaled;
-    else if ('amt-in' in p && p['amt-in'] === null)    p['amt-in'] = amountScaled;
-    else if ('amt-in-max' in p && p['amt-in-max'] === null) p['amt-in-max'] = amountScaled;
-    else if ('y-amount' in p && p['y-amount'] === null) { p['y-amount'] = amountScaled; p['x-amount'] = amountScaled; }
-    else if ('x-amount' in p && p['x-amount'] === null) p['x-amount'] = amountScaled;
-    else if ('dy' in p && p.dy === null)               p.dy = amountScaled;
-    else                                               p.dx = amountScaled;
+    if ('dx' in p && needsAmount(p.dx))                   p.dx = amountScaled;
+    else if ('amount' in p && needsAmount(p.amount))       p.amount = amountScaled;
+    else if ('amt-in' in p && needsAmount(p['amt-in']))    p['amt-in'] = amountScaled;
+    else if ('amt-in-max' in p && needsAmount(p['amt-in-max'])) p['amt-in-max'] = amountScaled;
+    else if ('y-amount' in p && needsAmount(p['y-amount'])) { p['y-amount'] = amountScaled; p['x-amount'] = amountScaled; }
+    else if ('x-amount' in p && needsAmount(p['x-amount'])) p['x-amount'] = amountScaled;
+    else if ('dy' in p && needsAmount(p.dy))               p.dy = amountScaled;
+    else                                                   p.dx = amountScaled;
 
     // Inject provider if needed
     if (fnDef.args.some((a: any) => a.name === 'provider') &&
@@ -466,13 +471,25 @@ export async function getParallelQuote(
 
     const converted = raw / Math.pow(10, tyDecimals);
 
+    // Resolve the canonical input amount (BigInt micro-units) from whichever
+    // param name this route uses, then spread it across all known input param
+    // names so the SDK always finds an integer regardless of route type.
+    const inputAmountScaled =
+      p.dx ?? p.amount ?? p['amt-in'] ?? p['amt-in-max'] ??
+      p['y-amount'] ?? p['x-amount'] ?? p.dy ?? amountScaled;
+
     const updatedSwapData = {
       ...route.swapData,
       parameters: {
         ...route.swapData?.parameters,
-        amount: p.dx ?? p.amount ?? p['amt-in'] ?? p['y-amount'] ?? p['x-amount'] ?? p.dy,
-        dx: p.dx ?? p.amount ?? p['amt-in'],
-        'amt-in': p['amt-in'] ?? p.dx ?? p.amount,
+        // Overwrite ALL known input-amount param names with the scaled integer
+        // so the SDK never encounters a decimal float when it calls BigInt().
+        amount: inputAmountScaled,
+        dx: inputAmountScaled,
+        'amt-in': inputAmountScaled,
+        dy: p.dy ?? inputAmountScaled,
+        'y-amount': p['y-amount'] ?? inputAmountScaled,
+        'x-amount': p['x-amount'] ?? inputAmountScaled,
         'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
         'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,
         'min-y-amount': raw, 'min-dx': raw,
