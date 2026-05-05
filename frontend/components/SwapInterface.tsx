@@ -723,6 +723,10 @@ export function SwapInterface() {
         // getParallelQuote returns { route: SelectedSwapRoute, swapData, ... }
         // but the SDK's getSwapParams expects a SelectedSwapRoute directly.
         const selectedRoute = (bestRoute as any).route || bestRoute;
+        // Debug: log decimal params
+        const _sr = selectedRoute.swapData?.parameters || {};
+        const _ds = Object.entries(_sr).filter(([, v]: [string, any]) => typeof v === 'number' && !Number.isInteger(v) || typeof v === 'string' && v.includes('.') && !isNaN(Number(v)));
+        if (_ds.length > 0) console.error('[VelumX] DECIMAL in non-gasless selectedRoute:', JSON.stringify(_ds));
 
         const swapParams = await bitflow.getSwapParams({
           route: selectedRoute,

@@ -49,7 +49,7 @@ const LS_ROUTES_TTL_MS = 30 * 60_000; // 30 minutes
 // Quote result cache TTL — amount-specific, shorter TTL since prices move.
 const QUOTE_CACHE_TTL_MS = 60_000; // 1 minute
 
-const LS_ROUTES_KEY = 'velumx_routes_v4';
+const LS_ROUTES_KEY = 'velumx_routes_v5';
 
 // ── In-memory route cache ─────────────────────────────────────────────────────
 // The Bitflow getAllRoutes API returns a Record<tokenY, SelectedSwapRoute[]>.
@@ -59,8 +59,9 @@ const _routesCache = new Map<string, { ts: number; routes: Record<string, any[]>
 const _routesFetching = new Map<string, Promise<Record<string, any[]>>>();
 
 // ── Quote result cache ────────────────────────────────────────────────────────
-// Keyed by `${tokenX}:${tokenY}:${amount}` — avoids re-running on-chain calls
+// Keyed by `v2:${tokenX}:${tokenY}:${amount}` — avoids re-running on-chain calls
 // when the user hasn't changed the pair or amount (e.g. switching tabs, re-renders).
+// v2: bumped to invalidate stale entries that stored BigInt/decimal param values.
 const _quoteCache = new Map<string, { ts: number; result: QuoteResult }>();
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -364,7 +365,7 @@ export async function getParallelQuote(
   const ctx = (sdk as any).context;
 
   // Check quote cache first — skip all on-chain calls if we have a fresh result
-  const quoteKey = `${tokenX}:${tokenY}:${amount}`;
+  const quoteKey = `v2:${tokenX}:${tokenY}:${amount}`;
   const cachedQuote = _quoteCache.get(quoteKey);
   if (cachedQuote && Date.now() - cachedQuote.ts < QUOTE_CACHE_TTL_MS) {
     return cachedQuote.result;
@@ -416,14 +417,15 @@ export async function getParallelQuote(
     if (!fnDef) throw new Error(`Function ${qd.function} not found in ABI`);
 
     // Build params with amount injected.
-    // The Bitflow API sometimes pre-fills input params with a decimal (human-readable)
-    // value instead of null. We must replace any input param that is null OR a
-    // non-integer number (decimal float) — otherwise BigInt() throws a RangeError
-    // when the SDK tries to convert it.
-    // Store as a plain integer (not BigInt) — BigInt values get serialized to "4402n"
-    // strings when passed through JSON.stringify/parse, which also breaks BigInt().
+    // The Bitflow API sometimes pre-fills input params with a decimal value
+    // (as a number OR a string like "0.003") instead of null. We must replace
+    // any input param that is null, undefined, or a non-integer value.
     const amountInt = Number(amountScaled); // safe integer — Math.floor already applied
-    const needsAmount = (v: any) => v === null || v === undefined || (typeof v === 'number' && !Number.isInteger(v));
+    const needsAmount = (v: any) =>
+      v === null ||
+      v === undefined ||
+      (typeof v === 'number' && !Number.isInteger(v)) ||
+      (typeof v === 'string' && !Number.isInteger(Number(v)));
     const p: Record<string, any> = { ...qd.parameters };
     if ('dx' in p && needsAmount(p.dx))                   p.dx = amountInt;
     else if ('amount' in p && needsAmount(p.amount))       p.amount = amountInt;
@@ -485,16 +487,17 @@ export async function getParallelQuote(
       ...route.swapData,
       parameters: {
         ...route.swapData?.parameters,
-        // Always set dx — the SDK's postConditionsHelper reads functionArgs.dx
-        // for the first post condition regardless of which param name the route uses.
-        dx: inputAmountInt,
-        // Also set the route's native param name so constructFunctionArgs gets the right value
-        ...(p.amount !== undefined && { amount: p.amount }),
-        ...(p['amt-in'] !== undefined && { 'amt-in': p['amt-in'] }),
-        ...(p['amt-in-max'] !== undefined && { 'amt-in-max': p['amt-in-max'] }),
-        ...(p['y-amount'] !== undefined && { 'y-amount': p['y-amount'] }),
-        ...(p['x-amount'] !== undefined && { 'x-amount': p['x-amount'] }),
-        ...(p.dy !== undefined && { dy: p.dy }),
+        // Unconditionally overwrite ALL known input-amount param names with the
+        // scaled integer. The spread above may contain decimal floats from the
+        // Bitflow API — we must clobber every one of them so the SDK's BigInt()
+        // call never sees a non-integer value.
+        dx:          inputAmountInt,
+        dy:          inputAmountInt,
+        amount:      inputAmountInt,
+        'amt-in':    inputAmountInt,
+        'amt-in-max': inputAmountInt,
+        'y-amount':  inputAmountInt,
+        'x-amount':  inputAmountInt,
         // Overwrite output params with the raw integer quote result
         'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
         'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,

@@ -310,6 +310,19 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           },
         };
 
+        // Debug: log all swapData parameters to find the decimal source
+        const _params = patchedRoute.swapData?.parameters || {};
+        const _decimalKeys = Object.entries(_params).filter(([, v]) =>
+          typeof v === 'number' && !Number.isInteger(v) ||
+          typeof v === 'string' && v.includes('.') && !isNaN(Number(v))
+        );
+        if (_decimalKeys.length > 0) {
+          console.error('[VelumX] DECIMAL PARAMS FOUND in patchedRoute:', JSON.stringify(_decimalKeys));
+          console.error('[VelumX] Full swapData.parameters:', JSON.stringify(_params, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
+          console.error('[VelumX] candidateRoute.swapData:', JSON.stringify((candidateRoute as any).swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
+          console.error('[VelumX] candidateRoute.route?.swapData:', JSON.stringify((candidateRoute as any).route?.swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
+        }
+
         const swapParams = await bitflow.getSwapParams(
           {
             route: patchedRoute,
@@ -692,6 +705,10 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ...((bestRoute as any).route || bestRoute),
         swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
       };
+      // Debug: log decimal params
+      const _p2 = patchedRoute.swapData?.parameters || {};
+      const _d2 = Object.entries(_p2).filter(([, v]) => typeof v === 'number' && !Number.isInteger(v) || typeof v === 'string' && v.includes('.') && !isNaN(Number(v)));
+      if (_d2.length > 0) console.error('[VelumX] DECIMAL in stableswap/router patchedRoute:', JSON.stringify(_d2), 'bestRoute.swapData.params:', JSON.stringify((bestRoute as any).swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v));
       const swapParams = await bitflow.getSwapParams(
         { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
         userAddress,
