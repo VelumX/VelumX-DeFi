@@ -176,9 +176,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // Velar routers use swap-helper-a/b/c/d with tuple trait args — not compatible
   // with bitflow-router-trait, but the paymaster has dedicated hardcoded functions
   // for them (swap-velar-xyk-router-* and swap-velar-stableswap-router-*).
-  // The paymaster hardcodes v-1-4 — remap older versions to it.
   const VELAR_XYK_ROUTER = 'router-xyk-velar-v-1-4';
-  const VELAR_XYK_ROUTER_ALIASES = new Set(['router-xyk-velar-v-1-2', 'router-xyk-velar-v-1-3', 'router-xyk-velar-v-1-4']);
   const VELAR_SS_ROUTER  = 'router-stableswap-velar-v-1-5';
 
   const isPaymasterCompatible = (contractStr: string): boolean => {
@@ -190,8 +188,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     const resolvedName = resolved.split('.')[1] || '';
     // Stableswap pools always implement the trait
     if (resolvedName.startsWith('stableswap-')) return true;
-    // Velar routers (all versions) have dedicated paymaster wrapper functions
-    if (VELAR_XYK_ROUTER_ALIASES.has(resolvedName) || resolvedName === VELAR_SS_ROUTER) return true;
+    // Velar routers have dedicated paymaster wrapper functions
+    if (resolvedName === VELAR_XYK_ROUTER || resolvedName === VELAR_SS_ROUTER) return true;
     // Only allow known-compatible routers
     if (PAYMASTER_COMPATIBLE_ROUTERS.has(resolvedName)) return true;
     return false;
@@ -220,6 +218,17 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
+  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
+
+  // Helper: build a contractPrincipalCV from a "ADDR.name" string
+  const toContractCV = (principal: string | undefined) => {
+    if (!principal || !principal.includes('.')) {
+      throw new Error(`Invalid contract principal: "${principal}". Expected "ADDRESS.name" format.`);
+    }
+    const [addr, name] = principal.split('.');
+    return contractPrincipalCV(addr, name);
+  };
+
   // Helper: optional uint — someCV(uintCV(n)) if n is defined, else noneCV()
   const toOptUint = (n: bigint | number | string | undefined) =>
     n !== undefined && n !== null ? someCV(uintCV(n)) : noneCV();
@@ -234,24 +243,8 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
   // 3. Build VelumX Contract Call based on Policy
   onProgress?.('Preparing VelumX transaction...');
-
-  // isDeveloperSponsoring is determined solely by the fee estimate policy.
-  // We cannot force DEVELOPER_SPONSORS — it requires the API key to have that policy.
-  const isDeveloperSponsoring = (
-    estimate.policy === 'DEVELOPER_SPONSORS' ||
-    params.sponsorshipPolicy === 'DEVELOPER_SPONSORS'
-  );
-
-  // If USER_PAYS but no paymaster-compatible route exists, fail early with a
-  // clear message rather than attempting an incompatible paymaster call.
-  // xyk-swap-helper uses a unique tuple-based signature the paymaster doesn't support.
-  if (!isDeveloperSponsoring && paymasterRoutes.length === 0) {
-    throw new Error(
-      'No gasless route available for this token pair. ' +
-      'The available liquidity pool is not supported by the paymaster. ' +
-      'Please disable gasless mode to swap directly.'
-    );
-  }
+  
+  const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
 
   // Guard: USER_PAYS requires a valid relayer address to receive the fee token
   if (!isDeveloperSponsoring && !relayerAddress) {
@@ -260,17 +253,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   
   let txOptions: any;
   
-  const amountInRaw = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
-
-  // Helper: build a contractPrincipalCV from a "ADDR.name" string
-  const toContractCV = (principal: string | undefined) => {
-    if (!principal || !principal.includes('.')) {
-      throw new Error(`Invalid contract principal: "${principal}". Expected "ADDRESS.name" format.`);
-    }
-    const [addr, name] = principal.split('.');
-    return contractPrincipalCV(addr, name);
-  };
-
   if (isDeveloperSponsoring) {
     // DEVELOPER_SPONSORS: Use the Bitflow SDK's getSwapParams to build function args correctly,
     // then override the contract address with the resolved mainnet deployer.
@@ -387,12 +369,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
 
     const contractName = resolvedPool.split('.')[1] || '';
     const isStableswap = contractName.startsWith('stableswap-');
-    // Remap older Velar XYK router versions to v-1-4 — the paymaster hardcodes v-1-4.
-    const isVelarXyk = VELAR_XYK_ROUTER_ALIASES.has(contractName);
-    if (isVelarXyk && contractName !== VELAR_XYK_ROUTER) {
-      // Substitute the canonical v-1-4 address so the paymaster call targets the right contract
-      resolvedPool = resolvedPool.replace(contractName, VELAR_XYK_ROUTER);
-    }
+    const isVelarXyk = contractName === VELAR_XYK_ROUTER;
     const isVelarSS  = contractName === VELAR_SS_ROUTER;
     const isReverse  = swapData.function === 'swap-y-for-x';
 

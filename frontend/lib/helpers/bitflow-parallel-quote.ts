@@ -49,7 +49,7 @@ const LS_ROUTES_TTL_MS = 30 * 60_000; // 30 minutes
 // Quote result cache TTL — amount-specific, shorter TTL since prices move.
 const QUOTE_CACHE_TTL_MS = 60_000; // 1 minute
 
-const LS_ROUTES_KEY = 'velumx_routes_v5';
+const LS_ROUTES_KEY = 'velumx_routes_v4';
 
 // ── In-memory route cache ─────────────────────────────────────────────────────
 // The Bitflow getAllRoutes API returns a Record<tokenY, SelectedSwapRoute[]>.
@@ -59,9 +59,8 @@ const _routesCache = new Map<string, { ts: number; routes: Record<string, any[]>
 const _routesFetching = new Map<string, Promise<Record<string, any[]>>>();
 
 // ── Quote result cache ────────────────────────────────────────────────────────
-// Keyed by `v2:${tokenX}:${tokenY}:${amount}` — avoids re-running on-chain calls
+// Keyed by `${tokenX}:${tokenY}:${amount}` — avoids re-running on-chain calls
 // when the user hasn't changed the pair or amount (e.g. switching tabs, re-renders).
-// v2: bumped to invalidate stale entries that stored BigInt/decimal param values.
 const _quoteCache = new Map<string, { ts: number; result: QuoteResult }>();
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -365,7 +364,7 @@ export async function getParallelQuote(
   const ctx = (sdk as any).context;
 
   // Check quote cache first — skip all on-chain calls if we have a fresh result
-  const quoteKey = `v2:${tokenX}:${tokenY}:${amount}`;
+  const quoteKey = `${tokenX}:${tokenY}:${amount}`;
   const cachedQuote = _quoteCache.get(quoteKey);
   if (cachedQuote && Date.now() - cachedQuote.ts < QUOTE_CACHE_TTL_MS) {
     return cachedQuote.result;
@@ -416,25 +415,16 @@ export async function getParallelQuote(
     const fnDef = abi?.functions?.find((f: any) => f.name === qd.function);
     if (!fnDef) throw new Error(`Function ${qd.function} not found in ABI`);
 
-    // Build params with amount injected.
-    // The Bitflow API sometimes pre-fills input params with a decimal value
-    // (as a number OR a string like "0.003") instead of null. We must replace
-    // any input param that is null, undefined, or a non-integer value.
-    const amountInt = Number(amountScaled); // safe integer — Math.floor already applied
-    const needsAmount = (v: any) =>
-      v === null ||
-      v === undefined ||
-      (typeof v === 'number' && !Number.isInteger(v)) ||
-      (typeof v === 'string' && !Number.isInteger(Number(v)));
+    // Build params with amount injected
     const p: Record<string, any> = { ...qd.parameters };
-    if ('dx' in p && needsAmount(p.dx))                   p.dx = amountInt;
-    else if ('amount' in p && needsAmount(p.amount))       p.amount = amountInt;
-    else if ('amt-in' in p && needsAmount(p['amt-in']))    p['amt-in'] = amountInt;
-    else if ('amt-in-max' in p && needsAmount(p['amt-in-max'])) p['amt-in-max'] = amountInt;
-    else if ('y-amount' in p && needsAmount(p['y-amount'])) { p['y-amount'] = amountInt; p['x-amount'] = amountInt; }
-    else if ('x-amount' in p && needsAmount(p['x-amount'])) p['x-amount'] = amountInt;
-    else if ('dy' in p && needsAmount(p.dy))               p.dy = amountInt;
-    else                                                   p.dx = amountInt;
+    if ('dx' in p && p.dx === null)                   p.dx = amountScaled;
+    else if ('amount' in p && p.amount === null)       p.amount = amountScaled;
+    else if ('amt-in' in p && p['amt-in'] === null)    p['amt-in'] = amountScaled;
+    else if ('amt-in-max' in p && p['amt-in-max'] === null) p['amt-in-max'] = amountScaled;
+    else if ('y-amount' in p && p['y-amount'] === null) { p['y-amount'] = amountScaled; p['x-amount'] = amountScaled; }
+    else if ('x-amount' in p && p['x-amount'] === null) p['x-amount'] = amountScaled;
+    else if ('dy' in p && p.dy === null)               p.dy = amountScaled;
+    else                                               p.dx = amountScaled;
 
     // Inject provider if needed
     if (fnDef.args.some((a: any) => a.name === 'provider') &&
@@ -476,29 +466,13 @@ export async function getParallelQuote(
 
     const converted = raw / Math.pow(10, tyDecimals);
 
-    // The canonical input amount as a plain integer — whichever param name
-    // this route uses. The SDK's postConditionsHelper always reads dx for the
-    // first post condition, so we always set it.
-    const inputAmountInt =
-      p.dx ?? p.amount ?? p['amt-in'] ?? p['amt-in-max'] ??
-      p['y-amount'] ?? p['x-amount'] ?? p.dy ?? amountInt;
-
     const updatedSwapData = {
       ...route.swapData,
       parameters: {
         ...route.swapData?.parameters,
-        // Unconditionally overwrite ALL known input-amount param names with the
-        // scaled integer. The spread above may contain decimal floats from the
-        // Bitflow API — we must clobber every one of them so the SDK's BigInt()
-        // call never sees a non-integer value.
-        dx:          inputAmountInt,
-        dy:          inputAmountInt,
-        amount:      inputAmountInt,
-        'amt-in':    inputAmountInt,
-        'amt-in-max': inputAmountInt,
-        'y-amount':  inputAmountInt,
-        'x-amount':  inputAmountInt,
-        // Overwrite output params with the raw integer quote result
+        amount: p.dx ?? p.amount ?? p['amt-in'] ?? p['y-amount'] ?? p['x-amount'] ?? p.dy,
+        dx: p.dx ?? p.amount ?? p['amt-in'],
+        'amt-in': p['amt-in'] ?? p.dx ?? p.amount,
         'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
         'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,
         'min-y-amount': raw, 'min-dx': raw,

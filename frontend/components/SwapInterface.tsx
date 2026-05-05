@@ -64,7 +64,7 @@ interface SwapState {
   feeEstimate: any | null;
   /** ALEX quote when ALEX wins the best-route race; null when Bitflow wins */
   alexQuote: import('@/lib/helpers/alex-swap').AlexQuoteResult | null;
-  /** User-selected route override — null means use bestRoute */
+  /** User-selected route override; null = use bestRoute */
   selectedRoute: any | null;
 }
 
@@ -128,8 +128,6 @@ function translateSwapError(message: string): string {
     return 'Wallet verification required. Please disconnect and reconnect your wallet.';
   if (m.includes('relayer address not available'))
     return 'Gasless service unavailable. Try disabling gasless mode.';
-  if (m.includes('no gasless route') || m.includes('not supported by the paymaster'))
-    return 'This token pair cannot be swapped in gasless mode. Please disable gasless mode to swap directly.';
   if (m.includes('no amm pool') || m.includes('no liquidity') || m.includes('no route'))
     return 'No liquidity found for this token pair.';
   if (m.includes('slippage') || m.includes('min-dy') || m.includes('min-dz') || m.includes('min-dw'))
@@ -466,7 +464,7 @@ export function SwapInterface() {
           ...prev,
           outputAmount,
           alexQuote: null,
-          selectedRoute: null, // reset user selection on new quote
+          selectedRoute: null,
           quote: {
             amountOut: outputAmount,
             priceImpact: '0.30',
@@ -663,64 +661,28 @@ export function SwapInterface() {
           return match?.tokenId || token.address;
         };
 
-        let txid: string;
-        let usedDirectSwap = false;
-
-        try {
-          txid = await executeBitflowGaslessSwap({
-            userAddress: stacksAddress,
-            userPublicKey: stacksPublicKey || undefined,
-            tokenIn: state.inputToken.address,
-            tokenInId: getTokenId(state.inputToken),
-            tokenOut: state.outputToken.address,
-            tokenOutId: getTokenId(state.outputToken),
-            amountIn: state.inputAmount,
-            tokenInDecimals: state.inputToken.decimals,
-            tokenOutDecimals: state.outputToken.decimals,
-            feeToken: state.selectedGasToken?.address || '',
-            sponsorshipPolicy: sponsorshipPolicy,
-            quoteResult: state.quote ? {
-              bestRoute: state.selectedRoute ?? state.quote.bestRoute,
-              allRoutes: state.selectedRoute
-                ? [state.selectedRoute]
-                : (state.quote.allRoutes ?? []),
-              inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
-            } : undefined,
-            feeEstimate: state.feeEstimate,
-            onProgress: (step) => {
-              setState(prev => ({ ...prev, success: step }));
-            }
-          });
-        } catch (gaslessErr: any) {
-          // If the route isn't paymaster-compatible, fall back to a direct
-          // (non-gasless) swap so the user isn't blocked.
-          if (gaslessErr?.message?.includes('not supported by the paymaster') ||
-              gaslessErr?.message?.includes('No gasless route')) {
-            usedDirectSwap = true;
-            const bitflow = getBitflowSDK();
-            const bestRoute = state.quote?.bestRoute;
-            if (!bestRoute) throw new Error('No valid swap route found. Please refresh the quote.');
-            const selectedRoute = (bestRoute as any).route || bestRoute;
-            const swapParams = await bitflow.getSwapParams({
-              route: selectedRoute,
-              amount: parseFloat(state.inputAmount),
-              tokenXDecimals: state.inputToken.decimals,
-              tokenYDecimals: state.outputToken.decimals,
-            }, stacksAddress, state.slippage / 100);
-            const { request: stacksRequest } = await import('@stacks/connect');
-            const result = await stacksRequest('stx_callContract', {
-              contract: `${swapParams.contractAddress}.${swapParams.contractName}`,
-              functionName: swapParams.functionName,
-              functionArgs: swapParams.functionArgs,
-              network: 'mainnet',
-              postConditionMode: 'allow',
-              postConditions: [],
-            });
-            txid = (result as any).txid;
-          } else {
-            throw gaslessErr;
+        const txid = await executeBitflowGaslessSwap({
+          userAddress: stacksAddress,
+          userPublicKey: stacksPublicKey || undefined,
+          tokenIn: state.inputToken.address,
+          tokenInId: getTokenId(state.inputToken),
+          tokenOut: state.outputToken.address,
+          tokenOutId: getTokenId(state.outputToken),
+          amountIn: state.inputAmount,
+          tokenInDecimals: state.inputToken.decimals,
+          tokenOutDecimals: state.outputToken.decimals,
+          feeToken: state.selectedGasToken?.address || '',
+          sponsorshipPolicy: sponsorshipPolicy,
+          quoteResult: state.quote ? {
+            bestRoute: state.selectedRoute ?? state.quote.bestRoute,
+            allRoutes: state.quote.allRoutes ?? [],
+            inputData: { tokenX: getTokenId(state.inputToken), tokenY: getTokenId(state.outputToken), amountInput: parseFloat(state.inputAmount) },
+          } : undefined,
+          feeEstimate: state.feeEstimate,
+          onProgress: (step) => {
+            setState(prev => ({ ...prev, success: step }));
           }
-        }
+        });
 
         setState(prev => ({
           ...prev,
@@ -753,21 +715,16 @@ export function SwapInterface() {
         // Standard non-gasless swap via Bitflow SDK
         const bitflow = getBitflowSDK();
         
-        // Use the route stored in our quote state to ensure consistency.
-        // bestRoute is a RouteQuote from getParallelQuote — extract the nested
-        // SelectedSwapRoute for the SDK's getSwapParams.
+        // Use the route stored in our quote state to ensure consistency
         const bestRoute = state.selectedRoute ?? state.quote.bestRoute;
         if (!bestRoute) throw new Error('No valid swap route found in state. Please refresh the quote.');
 
         const amountIn = parseFloat(state.inputAmount);
 
-        // Extract the SelectedSwapRoute from the RouteQuote.
-        // getParallelQuote returns { route: SelectedSwapRoute, swapData, ... }
-        // but the SDK's getSwapParams expects a SelectedSwapRoute directly.
-        const selectedRoute = (bestRoute as any).route || bestRoute;
+
 
         const swapParams = await bitflow.getSwapParams({
-          route: selectedRoute,
+          route: bestRoute,
           amount: amountIn,
           tokenXDecimals: state.inputToken.decimals,
           tokenYDecimals: state.outputToken.decimals,
@@ -887,7 +844,7 @@ export function SwapInterface() {
             amount={state.inputAmount}
             setAmount={(val: string) => setState(prev => ({ ...prev, inputAmount: val, error: null }))}
             token={state.inputToken}
-            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, outputAmount: '', quote: null, selectedRoute: null, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, inputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
             tokens={tokens}
             balance={getBalance(state.inputToken)}
             isProcessing={state.isProcessing}
@@ -918,7 +875,7 @@ export function SwapInterface() {
             amount={state.outputAmount}
             setAmount={() => { }}
             token={state.outputToken}
-            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, outputAmount: '', quote: null, selectedRoute: null, success: null, error: null }))}
+            setToken={(t) => setState(prev => ({ ...prev, outputToken: t, outputAmount: '', quote: null, success: null, error: null }))}
             tokens={routableTokenIds.size > 0
               ? tokens.filter(t => {
                   const id = t.tokenId || t.address;
@@ -959,11 +916,10 @@ export function SwapInterface() {
                 {state.quote.allRoutes
                   .sort((a: any, b: any) => (b.quote || 0) - (a.quote || 0))
                   .map((route: any, i: number) => {
-                    const effectiveRoute = state.selectedRoute ?? state.quote?.bestRoute;
-                    const isSelected = route === effectiveRoute ||
-                      (route.quote !== null && route.quote === effectiveRoute?.quote &&
-                       JSON.stringify(route.dexPath ?? route.dex_path) ===
-                       JSON.stringify(effectiveRoute?.dexPath ?? (effectiveRoute as any)?.dex_path));
+                    const activeRoute = state.selectedRoute ?? state.quote?.bestRoute;
+                    const isSelected = route === activeRoute ||
+                      (route.quote !== null && route.quote === activeRoute?.quote &&
+                       (route.swapData?.contract === activeRoute?.swapData?.contract));
                     const isBest = route === state.quote?.bestRoute ||
                       (route.quote !== null && route.quote === state.quote?.bestRoute?.quote);
                     const dexPath: string[] = route.dexPath || route.dex_path || [];
@@ -985,9 +941,7 @@ export function SwapInterface() {
                         }}
                         className="w-full px-4 py-3 flex items-center justify-between gap-3 transition-colors text-left disabled:cursor-not-allowed"
                         style={{
-                          backgroundColor: isSelected
-                            ? 'rgba(37,99,235,0.10)'
-                            : 'transparent',
+                          backgroundColor: isSelected ? 'rgba(37,99,235,0.10)' : 'transparent',
                           opacity: isDisabled ? 0.4 : 1,
                           cursor: isDisabled ? 'not-allowed' : 'pointer',
                         }}
@@ -995,7 +949,7 @@ export function SwapInterface() {
                         onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
                       >
                         <div className="flex items-center gap-2 flex-wrap min-w-0">
-                          {/* Selected indicator */}
+                          {/* Radio indicator */}
                           <div
                             className="w-3.5 h-3.5 rounded-full border-2 shrink-0 flex items-center justify-center"
                             style={{
@@ -1005,7 +959,6 @@ export function SwapInterface() {
                           >
                             {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                           </div>
-
                           {isBest && (
                             <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0"
                               style={{ backgroundColor: 'rgba(37,99,235,0.12)', color: '#2563EB' }}>
