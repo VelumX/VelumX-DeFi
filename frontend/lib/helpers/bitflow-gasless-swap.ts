@@ -310,7 +310,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           },
         };
 
-        console.log('[VelumX] getSwapParams patchedRoute.swapData.parameters:', JSON.stringify(patchedRoute.swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v, 2));
         const swapParams = await bitflow.getSwapParams(
           {
             route: patchedRoute,
@@ -693,7 +692,6 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         ...((bestRoute as any).route || bestRoute),
         swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
       };
-      console.log('[VelumX] getSwapParams (stableswap/router) patchedRoute.swapData.parameters:', JSON.stringify(patchedRoute.swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v, 2));
       const swapParams = await bitflow.getSwapParams(
         { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
         userAddress,

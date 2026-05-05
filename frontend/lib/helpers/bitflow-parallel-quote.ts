@@ -420,16 +420,19 @@ export async function getParallelQuote(
     // value instead of null. We must replace any input param that is null OR a
     // non-integer number (decimal float) — otherwise BigInt() throws a RangeError
     // when the SDK tries to convert it.
+    // Store as a plain integer (not BigInt) — BigInt values get serialized to "4402n"
+    // strings when passed through JSON.stringify/parse, which also breaks BigInt().
+    const amountInt = Number(amountScaled); // safe integer — Math.floor already applied
     const needsAmount = (v: any) => v === null || v === undefined || (typeof v === 'number' && !Number.isInteger(v));
     const p: Record<string, any> = { ...qd.parameters };
-    if ('dx' in p && needsAmount(p.dx))                   p.dx = amountScaled;
-    else if ('amount' in p && needsAmount(p.amount))       p.amount = amountScaled;
-    else if ('amt-in' in p && needsAmount(p['amt-in']))    p['amt-in'] = amountScaled;
-    else if ('amt-in-max' in p && needsAmount(p['amt-in-max'])) p['amt-in-max'] = amountScaled;
-    else if ('y-amount' in p && needsAmount(p['y-amount'])) { p['y-amount'] = amountScaled; p['x-amount'] = amountScaled; }
-    else if ('x-amount' in p && needsAmount(p['x-amount'])) p['x-amount'] = amountScaled;
-    else if ('dy' in p && needsAmount(p.dy))               p.dy = amountScaled;
-    else                                                   p.dx = amountScaled;
+    if ('dx' in p && needsAmount(p.dx))                   p.dx = amountInt;
+    else if ('amount' in p && needsAmount(p.amount))       p.amount = amountInt;
+    else if ('amt-in' in p && needsAmount(p['amt-in']))    p['amt-in'] = amountInt;
+    else if ('amt-in-max' in p && needsAmount(p['amt-in-max'])) p['amt-in-max'] = amountInt;
+    else if ('y-amount' in p && needsAmount(p['y-amount'])) { p['y-amount'] = amountInt; p['x-amount'] = amountInt; }
+    else if ('x-amount' in p && needsAmount(p['x-amount'])) p['x-amount'] = amountInt;
+    else if ('dy' in p && needsAmount(p.dy))               p.dy = amountInt;
+    else                                                   p.dx = amountInt;
 
     // Inject provider if needed
     if (fnDef.args.some((a: any) => a.name === 'provider') &&
@@ -471,12 +474,12 @@ export async function getParallelQuote(
 
     const converted = raw / Math.pow(10, tyDecimals);
 
-    // The canonical input amount as BigInt micro-units — whichever param name
-    // this route uses, we need it for the post-condition builder which always
-    // reads `swapParameters.dx` regardless of route type.
-    const inputAmountBigInt =
+    // The canonical input amount as a plain integer — whichever param name
+    // this route uses. The SDK's postConditionsHelper always reads dx for the
+    // first post condition, so we always set it.
+    const inputAmountInt =
       p.dx ?? p.amount ?? p['amt-in'] ?? p['amt-in-max'] ??
-      p['y-amount'] ?? p['x-amount'] ?? p.dy ?? amountScaled;
+      p['y-amount'] ?? p['x-amount'] ?? p.dy ?? amountInt;
 
     const updatedSwapData = {
       ...route.swapData,
@@ -484,7 +487,7 @@ export async function getParallelQuote(
         ...route.swapData?.parameters,
         // Always set dx — the SDK's postConditionsHelper reads functionArgs.dx
         // for the first post condition regardless of which param name the route uses.
-        dx: inputAmountBigInt,
+        dx: inputAmountInt,
         // Also set the route's native param name so constructFunctionArgs gets the right value
         ...(p.amount !== undefined && { amount: p.amount }),
         ...(p['amt-in'] !== undefined && { 'amt-in': p['amt-in'] }),
