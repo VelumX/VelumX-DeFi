@@ -471,10 +471,10 @@ export async function getParallelQuote(
 
     const converted = raw / Math.pow(10, tyDecimals);
 
-    // Resolve the canonical input amount (BigInt micro-units) from whichever
-    // param name this route uses, then spread it across all known input param
-    // names so the SDK always finds an integer regardless of route type.
-    const inputAmountScaled =
+    // The canonical input amount as BigInt micro-units — whichever param name
+    // this route uses, we need it for the post-condition builder which always
+    // reads `swapParameters.dx` regardless of route type.
+    const inputAmountBigInt =
       p.dx ?? p.amount ?? p['amt-in'] ?? p['amt-in-max'] ??
       p['y-amount'] ?? p['x-amount'] ?? p.dy ?? amountScaled;
 
@@ -482,14 +482,17 @@ export async function getParallelQuote(
       ...route.swapData,
       parameters: {
         ...route.swapData?.parameters,
-        // Overwrite ALL known input-amount param names with the scaled integer
-        // so the SDK never encounters a decimal float when it calls BigInt().
-        amount: inputAmountScaled,
-        dx: inputAmountScaled,
-        'amt-in': inputAmountScaled,
-        dy: p.dy ?? inputAmountScaled,
-        'y-amount': p['y-amount'] ?? inputAmountScaled,
-        'x-amount': p['x-amount'] ?? inputAmountScaled,
+        // Always set dx — the SDK's postConditionsHelper reads functionArgs.dx
+        // for the first post condition regardless of which param name the route uses.
+        dx: inputAmountBigInt,
+        // Also set the route's native param name so constructFunctionArgs gets the right value
+        ...(p.amount !== undefined && { amount: p.amount }),
+        ...(p['amt-in'] !== undefined && { 'amt-in': p['amt-in'] }),
+        ...(p['amt-in-max'] !== undefined && { 'amt-in-max': p['amt-in-max'] }),
+        ...(p['y-amount'] !== undefined && { 'y-amount': p['y-amount'] }),
+        ...(p['x-amount'] !== undefined && { 'x-amount': p['x-amount'] }),
+        ...(p.dy !== undefined && { dy: p.dy }),
+        // Overwrite output params with the raw integer quote result
         'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
         'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,
         'min-y-amount': raw, 'min-dx': raw,

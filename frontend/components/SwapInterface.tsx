@@ -711,16 +711,21 @@ export function SwapInterface() {
         // Standard non-gasless swap via Bitflow SDK
         const bitflow = getBitflowSDK();
         
-        // Use the route stored in our quote state to ensure consistency
+        // Use the route stored in our quote state to ensure consistency.
+        // bestRoute is a RouteQuote from getParallelQuote — extract the nested
+        // SelectedSwapRoute for the SDK's getSwapParams.
         const bestRoute = state.quote.bestRoute;
         if (!bestRoute) throw new Error('No valid swap route found in state. Please refresh the quote.');
 
         const amountIn = parseFloat(state.inputAmount);
 
-
+        // Extract the SelectedSwapRoute from the RouteQuote.
+        // getParallelQuote returns { route: SelectedSwapRoute, swapData, ... }
+        // but the SDK's getSwapParams expects a SelectedSwapRoute directly.
+        const selectedRoute = (bestRoute as any).route || bestRoute;
 
         const swapParams = await bitflow.getSwapParams({
-          route: bestRoute,
+          route: selectedRoute,
           amount: amountIn,
           tokenXDecimals: state.inputToken.decimals,
           tokenYDecimals: state.outputToken.decimals,
