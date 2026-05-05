@@ -724,6 +724,8 @@ export function SwapInterface() {
         // but the SDK's getSwapParams expects a SelectedSwapRoute directly.
         const selectedRoute = (bestRoute as any).route || bestRoute;
 
+        console.log('[VelumX] non-gasless selectedRoute.swapData.parameters:', JSON.stringify(selectedRoute.swapData?.parameters, (_, v) => typeof v === 'bigint' ? v.toString() + 'n' : v, 2));
+
         const swapParams = await bitflow.getSwapParams({
           route: selectedRoute,
           amount: amountIn,
