@@ -33,7 +33,7 @@ This frontend is also a **developer reference** — the code shows exactly how t
 - **Framework**: Next.js 16 + React 19
 - **Stacks**: `@stacks/transactions`, `@stacks/connect`
 - **DeFi**: `@bitflowlabs/core-sdk`, `alex-sdk`
-- **Gasless**: `@velumx/sdk@^3.1.2`
+- **Gasless**: `@velumx/sdk@^3.1.4`
 - **Wallets**: Leather, Xverse (via `@stacks/connect`)
 - **Ethereum**: Wagmi + Viem (for bridge source chain)
 
@@ -78,7 +78,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## VelumX SDK Integration
 
-This project uses `@velumx/sdk@^3.1.2`. The two exports used throughout the codebase are:
+This project uses `@velumx/sdk@^3.1.4`. The two exports used throughout the codebase are:
 
 ```ts
 import { VelumXClient, buildSponsoredContractCall } from '@velumx/sdk';
@@ -155,7 +155,7 @@ See `lib/helpers/bitflow-gasless-swap.ts` for the full Bitflow implementation, i
 
 ### USER_PAYS Flow (Bitflow swaps + USDCx bridge)
 
-For `USER_PAYS`, the transaction targets `velumx-defi-paymaster-v1`. The paymaster atomically collects the fee token from the user and executes the underlying action. The fee amount and relayer address come from `estimateFee`.
+For `USER_PAYS`, the transaction targets `velumx-defi-paymaster-v1-1`. The paymaster atomically collects the fee token from the user and executes the underlying action. The fee amount and relayer address come from `estimateFee`.
 
 ```ts
 import { buildSponsoredContractCall } from '@velumx/sdk';

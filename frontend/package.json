@@ -24,7 +24,7 @@
     "@tanstack/react-query": "^5.100.8",
     "@types/bip39": "^2.4.2",
     "@velarprotocol/velar-sdk": "^0.7.6",
-    "@velumx/sdk": "^3.1.2",
+    "@velumx/sdk": "^3.1.4",
     "alex-sdk": "^3.2.1",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
