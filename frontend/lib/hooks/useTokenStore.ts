@@ -10,6 +10,70 @@
 
 import { getBitflowSDK } from '@/lib/bitflow';
 
+// ── HODLMM BFF token fetcher ──────────────────────────────────────────────────
+// Bitflow migrated from api.bitflowapis.finance/getAllTokensAndPools (now 502)
+// to bff.bitflowapis.finance/api/quotes/v1/tokens. The new schema uses
+// contract_address / decimals / image instead of tokenContract / tokenDecimals / icon.
+// We proxy through /api/bitflow-bff to avoid CORS.
+
+interface BffToken {
+  contract_address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  asset_name: string;
+  image?: string;
+}
+
+async function fetchTokensFromBff(): Promise<any[]> {
+  const res = await fetch('/api/bitflow-bff/quotes/v1/tokens', {
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw new Error(`BFF tokens: ${res.status}`);
+  const data = await res.json();
+  const tokens: BffToken[] = data?.tokens ?? [];
+  // Map new BFF schema → old SDK schema so the rest of the app works unchanged
+  return tokens.map((t) => {
+    // Derive a stable token-id. STX is a special case: the BFF returns
+    // "SM1793....token-stx-v-1-2" as the contract address but the rest of the
+    // app identifies it as "token-stx". For all other tokens we use the
+    // contract name (last segment after '.') prefixed with "token-".
+    const contractName = t.contract_address?.split('.')?.pop() ?? '';
+    let tokenId: string;
+    if (t.symbol === 'STX' || contractName.startsWith('token-stx')) {
+      tokenId = 'token-stx';
+    } else {
+      tokenId = contractName ? `token-${contractName}` : `token-${(t.symbol || '').toLowerCase()}`;
+    }
+
+    // For STX, use the canonical wSTX contract that the rest of the app expects
+    const tokenContract = (t.symbol === 'STX' || contractName.startsWith('token-stx'))
+      ? 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx'
+      : (t.contract_address || null);
+
+    return {
+      symbol: t.symbol || 'Unknown',
+      name: t.name || t.symbol || 'Unknown Token',
+      tokenContract,
+      tokenDecimals: t.decimals ?? 6,
+      icon: t.image || '',
+      'token-id': tokenId,
+      tokenId,
+      tokenName: t.asset_name || null,
+      status: 'active',
+      base: 'Stacks',
+      type: '',
+      isKeeperToken: false,
+      bridge: 'FALSE',
+      layerOneAsset: null,
+      priceData: {
+        '1h_change': null, '1yr_change': null, '24h_change': null,
+        '30d_change': null, '7d_change': null, last_price: null, last_updated: null,
+      },
+    };
+  });
+}
+
 // ── Shared token type ─────────────────────────────────────────────────────────
 
 export interface DiscoveredToken {
@@ -24,7 +88,7 @@ export interface DiscoveredToken {
 
 // ── Cache config ──────────────────────────────────────────────────────────────
 
-const CACHE_KEY = 'velumx_tokens_v2'; // unified key — replaces v1 and sweep_v8
+const CACHE_KEY = 'velumx_tokens_v3'; // v3 — invalidates stale data from old api.bitflowapis.finance
 const CACHE_TTL = 60 * 60 * 1000;    // 1 hour
 
 // ── Module-level shared state ─────────────────────────────────────────────────
@@ -80,21 +144,46 @@ async function fetchTokens(): Promise<void> {
       const { timestamp, data } = JSON.parse(cached);
       if (Date.now() - timestamp < CACHE_TTL && data?.length > 0) {
         applyTokens(mapTokens(data));
-        // Refresh in background — don't await, don't block
-        getBitflowSDK().getAvailableTokens().then(fresh => {
+        // Refresh in background from BFF, fall back to legacy SDK
+        fetchTokensFromBff().then(fresh => {
           if (fresh?.length > 0) {
             applyTokens(mapTokens(fresh));
             try {
               localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
             } catch (_) {}
           }
-        }).catch(() => {});
+        }).catch(() => {
+          getBitflowSDK().getAvailableTokens().then(fresh => {
+            if (fresh?.length > 0) {
+              applyTokens(mapTokens(fresh));
+              try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
+              } catch (_) {}
+            }
+          }).catch(() => {});
+        });
         return;
       }
     }
   } catch (_) {}
 
-  // 2. No valid cache — fetch fresh
+  // 2. No valid cache — fetch fresh from BFF, fall back to legacy SDK
+  try {
+    const fresh = await fetchTokensFromBff();
+    if (fresh?.length > 0) {
+      applyTokens(mapTokens(fresh));
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
+      } catch (_) {}
+      _isLoading = false;
+      notify();
+      return;
+    }
+  } catch (bffErr) {
+    console.warn('[TokenStore] BFF fetch failed, falling back to legacy SDK:', bffErr);
+  }
+
+  // 3. Legacy SDK fallback (api.bitflowapis.finance — may be down)
   try {
     const fresh = await getBitflowSDK().getAvailableTokens();
     if (fresh?.length > 0) {
