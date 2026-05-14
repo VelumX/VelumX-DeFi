@@ -466,6 +466,12 @@ export async function getParallelQuote(
 
     const converted = raw / Math.pow(10, tyDecimals);
 
+    // Apply 1% slippage buffer to all min-received fields.
+    // The quote is fetched up to 60s before execution (wallet signing + relayer
+    // co-signing takes time), so price can move. Without a buffer every XYK
+    // swap fails with ERR_MINIMUM_RECEIVED (u6009) on any price tick.
+    const minRaw = Math.floor(raw * 0.99);
+
     const updatedSwapData = {
       ...route.swapData,
       parameters: {
@@ -473,9 +479,9 @@ export async function getParallelQuote(
         amount: p.dx ?? p.amount ?? p['amt-in'] ?? p['y-amount'] ?? p['x-amount'] ?? p.dy,
         dx: p.dx ?? p.amount ?? p['amt-in'],
         'amt-in': p['amt-in'] ?? p.dx ?? p.amount,
-        'min-received': raw, 'min-dy': raw, 'min-dz': raw, 'min-dw': raw,
-        'amt-out': raw, 'amt-out-min': raw, 'min-x-amount': raw,
-        'min-y-amount': raw, 'min-dx': raw,
+        'min-received': minRaw, 'min-dy': minRaw, 'min-dz': minRaw, 'min-dw': minRaw,
+        'amt-out': minRaw, 'amt-out-min': minRaw, 'min-x-amount': minRaw,
+        'min-y-amount': minRaw, 'min-dx': minRaw,
         provider: p.provider,
       },
     };
