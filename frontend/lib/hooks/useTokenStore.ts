@@ -6,15 +6,20 @@
  * 2. Sharing a single in-memory + localStorage cache across SwapInterface
  *    and BatchSwapInterface so the API is called at most once per TTL
  * 3. Providing a React hook that subscribes to the shared state
+ *
+ * Token source priority:
+ *   1. Old Bitflow API (api.bitflowapis.finance/getAllTokensAndPools) via SDK
+ *      — 202 tokens, the full routing universe, used by getAllRoutes
+ *   2. HODLMM BFF (bff.bitflowapis.finance/api/quotes/v1/tokens)
+ *      — 5 HODLMM-only tokens, used as fallback if old API is down
  */
 
 import { getBitflowSDK } from '@/lib/bitflow';
 
-// ── HODLMM BFF token fetcher ──────────────────────────────────────────────────
-// Bitflow migrated from api.bitflowapis.finance/getAllTokensAndPools (now 502)
-// to bff.bitflowapis.finance/api/quotes/v1/tokens. The new schema uses
-// contract_address / decimals / image instead of tokenContract / tokenDecimals / icon.
-// We proxy through /api/bitflow-bff to avoid CORS.
+// ── HODLMM BFF token fetcher (fallback only) ──────────────────────────────────
+// The BFF only exposes the 5 HODLMM pool tokens. We use it as a fallback when
+// the old API is temporarily unavailable (e.g. transient 502s).
+// Schema: contract_address / decimals / image / asset_name (no token-id field).
 
 interface BffToken {
   contract_address: string;
@@ -25,6 +30,13 @@ interface BffToken {
   image?: string;
 }
 
+// SM* deployer addresses that are valid on Stacks mainnet.
+// These are multisig deployers used by Bitflow, ALEX, and sBTC — not testnet.
+const SM_TO_SP: Record<string, string> = {
+  'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR': 'SM1793C4R5PZ4NS4VQ4WMP7SKKYVH8JZEWSZ9HCCR', // Bitflow/ALEX XYK — valid mainnet SM
+  'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4': 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4', // sBTC — valid mainnet SM
+};
+
 async function fetchTokensFromBff(): Promise<any[]> {
   const res = await fetch('/api/bitflow-bff/quotes/v1/tokens', {
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -32,22 +44,20 @@ async function fetchTokensFromBff(): Promise<any[]> {
   if (!res.ok) throw new Error(`BFF tokens: ${res.status}`);
   const data = await res.json();
   const tokens: BffToken[] = data?.tokens ?? [];
-  // Map new BFF schema → old SDK schema so the rest of the app works unchanged
-  return tokens.map((t) => {
-    // Derive a stable token-id. STX is a special case: the BFF returns
-    // "SM1793....token-stx-v-1-2" as the contract address but the rest of the
-    // app identifies it as "token-stx". For all other tokens we use the
-    // contract name (last segment after '.') prefixed with "token-".
-    const contractName = t.contract_address?.split('.')?.pop() ?? '';
-    let tokenId: string;
-    if (t.symbol === 'STX' || contractName.startsWith('token-stx')) {
-      tokenId = 'token-stx';
-    } else {
-      tokenId = contractName ? `token-${contractName}` : `token-${(t.symbol || '').toLowerCase()}`;
-    }
 
-    // For STX, use the canonical wSTX contract that the rest of the app expects
-    const tokenContract = (t.symbol === 'STX' || contractName.startsWith('token-stx'))
+  return tokens.map((t) => {
+    const contractName = t.contract_address?.split('.')?.pop() ?? '';
+
+    // STX special case: BFF returns "SM1793....token-stx-v-1-2" but the routing
+    // API uses "token-stx" as the token-id and expects the wSTX contract.
+    const isStx = t.symbol === 'STX' || contractName.startsWith('token-stx');
+    const tokenId = isStx
+      ? 'token-stx'
+      : contractName
+        ? `token-${contractName}`
+        : `token-${(t.symbol || '').toLowerCase()}`;
+
+    const tokenContract = isStx
       ? 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-wstx'
       : (t.contract_address || null);
 
@@ -88,12 +98,10 @@ export interface DiscoveredToken {
 
 // ── Cache config ──────────────────────────────────────────────────────────────
 
-const CACHE_KEY = 'velumx_tokens_v3'; // v3 — invalidates stale data from old api.bitflowapis.finance
+const CACHE_KEY = 'velumx_tokens_v4'; // v4 — bust BFF-only cache from previous broken deploy
 const CACHE_TTL = 60 * 60 * 1000;    // 1 hour
 
 // ── Module-level shared state ─────────────────────────────────────────────────
-// These live outside React so they persist across component mounts/unmounts
-// and are shared between SwapInterface and BatchSwapInterface.
 
 let _tokens: DiscoveredToken[] = [];
 let _isLoading = true;
@@ -109,9 +117,11 @@ function notify() {
 function mapTokens(list: any[]): DiscoveredToken[] {
   return list
     .filter((t: any) => {
-      const isStx = t['token-id'] === 'token-stx' || t.tokenId === 'token-stx';
-      const hasStacksContract = t.tokenContract && t.tokenContract.startsWith('SP');
-      return isStx || hasStacksContract;
+      // Accept STX by token-id
+      if (t['token-id'] === 'token-stx' || t.tokenId === 'token-stx') return true;
+      // Accept any token with a Stacks contract (SP* or SM* — both are valid mainnet)
+      const contract: string = t.tokenContract || '';
+      return contract.startsWith('SP') || contract.startsWith('SM');
     })
     .map((t: any) => ({
       symbol: t.symbol || 'Unknown',
@@ -119,7 +129,7 @@ function mapTokens(list: any[]): DiscoveredToken[] {
       address: t.tokenContract || (t.tokenId === 'token-stx' ? 'STX' : ''),
       decimals: t.tokenDecimals || 6,
       logoUrl: t.logoUrl || t.icon || t.logo_url || '',
-      tokenId: t.tokenId,
+      tokenId: t.tokenId || t['token-id'] || '',
     }))
     .filter(t =>
       t.symbol !== 'Unknown' &&
@@ -144,16 +154,10 @@ async function fetchTokens(): Promise<void> {
       const { timestamp, data } = JSON.parse(cached);
       if (Date.now() - timestamp < CACHE_TTL && data?.length > 0) {
         applyTokens(mapTokens(data));
-        // Refresh in background from BFF, fall back to legacy SDK
-        fetchTokensFromBff().then(fresh => {
-          if (fresh?.length > 0) {
-            applyTokens(mapTokens(fresh));
-            try {
-              localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
-            } catch (_) {}
-          }
-        }).catch(() => {
-          getBitflowSDK().getAvailableTokens().then(fresh => {
+        // Refresh in background — old API (202 tokens) first, BFF fallback
+        getBitflowSDK().getAvailableTokens()
+          .catch(() => fetchTokensFromBff())
+          .then(fresh => {
             if (fresh?.length > 0) {
               applyTokens(mapTokens(fresh));
               try {
@@ -161,43 +165,36 @@ async function fetchTokens(): Promise<void> {
               } catch (_) {}
             }
           }).catch(() => {});
-        });
         return;
       }
     }
   } catch (_) {}
 
-  // 2. No valid cache — fetch fresh from BFF, fall back to legacy SDK
+  // 2. No valid cache — fetch fresh.
+  //    Old API (via SDK) has the full 202-token universe used by getAllRoutes.
+  //    BFF is fallback-only (5 HODLMM tokens).
+  let fresh: any[] | null = null;
+
   try {
-    const fresh = await fetchTokensFromBff();
-    if (fresh?.length > 0) {
-      applyTokens(mapTokens(fresh));
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
-      } catch (_) {}
-      _isLoading = false;
-      notify();
-      return;
+    fresh = await getBitflowSDK().getAvailableTokens();
+  } catch (oldErr) {
+    console.warn('[TokenStore] Old API failed, trying BFF fallback:', oldErr);
+    try {
+      fresh = await fetchTokensFromBff();
+    } catch (bffErr) {
+      console.error('[TokenStore] Both token APIs failed:', bffErr);
     }
-  } catch (bffErr) {
-    console.warn('[TokenStore] BFF fetch failed, falling back to legacy SDK:', bffErr);
   }
 
-  // 3. Legacy SDK fallback (api.bitflowapis.finance — may be down)
-  try {
-    const fresh = await getBitflowSDK().getAvailableTokens();
-    if (fresh?.length > 0) {
-      applyTokens(mapTokens(fresh));
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
-      } catch (_) {}
-    }
-  } catch (e) {
-    console.error('[TokenStore] Fetch failed:', e);
-  } finally {
-    _isLoading = false;
-    notify();
+  if (fresh && fresh.length > 0) {
+    applyTokens(mapTokens(fresh));
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: fresh }));
+    } catch (_) {}
   }
+
+  _isLoading = false;
+  notify();
 }
 
 /**
@@ -211,8 +208,6 @@ export function prefetchTokens(): void {
 }
 
 // ── Start immediately at module load ─────────────────────────────────────────
-// This runs when the module is first imported (e.g. by SwapPageContent or
-// the layout), giving us a head-start before any component mounts.
 if (typeof window !== 'undefined') {
   prefetchTokens();
 }
@@ -226,7 +221,6 @@ export function useTokenStore(): { tokens: DiscoveredToken[]; isLoading: boolean
   const [isLoading, setIsLoading] = useState(_isLoading);
 
   useEffect(() => {
-    // Sync with current state in case it changed before this component mounted
     setTokens(_tokens);
     setIsLoading(_isLoading);
 
