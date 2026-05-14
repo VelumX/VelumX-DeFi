@@ -20,12 +20,6 @@ const nextConfig: NextConfig = {
         source: '/api/bitflow-node/:path*',
         destination: 'https://node.bitflowapis.finance/:path*',
       },
-      // HODLMM BFF API — new endpoint after Bitflow's migration away from
-      // api.bitflowapis.finance/getAllTokensAndPools (which now returns 502).
-      {
-        source: '/api/bitflow-bff/:path*',
-        destination: 'https://bff.bitflowapis.finance/api/:path*',
-      },
     ];
   },
 
@@ -85,12 +79,6 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'raw.githubusercontent.com',
         pathname: '/**',
-      },
-      {
-        // Bitflow HODLMM BFF token images
-        protocol: 'https',
-        hostname: 'storage.googleapis.com',
-        pathname: '/bitflow_images/**',
       },
     ],
   },

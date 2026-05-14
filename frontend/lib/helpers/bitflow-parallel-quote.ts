@@ -49,7 +49,7 @@ const LS_ROUTES_TTL_MS = 30 * 60_000; // 30 minutes
 // Quote result cache TTL — amount-specific, shorter TTL since prices move.
 const QUOTE_CACHE_TTL_MS = 60_000; // 1 minute
 
-const LS_ROUTES_KEY = 'velumx_routes_v6'; // v6 — bust stale routes from HODLMM migration period
+const LS_ROUTES_KEY = 'velumx_routes_v4';
 
 // ── In-memory route cache ─────────────────────────────────────────────────────
 // The Bitflow getAllRoutes API returns a Record<tokenY, SelectedSwapRoute[]>.
