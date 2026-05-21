@@ -310,10 +310,14 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
           },
         };
 
+        // The Bitflow SDK's getSwapParams expects `amount` in microunits (scaled integer),
+        // NOT a human-readable float. Passing a decimal like 2.8086 causes:
+        //   RangeError: The number 2.8086 cannot be converted to a BigInt
+        const amountInMicrounits = Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals));
         const swapParams = await bitflow.getSwapParams(
           {
             route: patchedRoute,
-            amount: Number(amountIn),
+            amount: amountInMicrounits,
             tokenXDecimals: params.tokenInDecimals,
             tokenYDecimals: params.tokenOutDecimals,
           },
@@ -693,7 +697,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         swapData: { ...(bestRoute as any).swapData, contract: resolvedPool },
       };
       const swapParams = await bitflow.getSwapParams(
-        { route: patchedRoute, amount: Number(amountIn), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
+        { route: patchedRoute, amount: Math.floor(Number(amountIn) * Math.pow(10, params.tokenInDecimals)), tokenXDecimals: params.tokenInDecimals, tokenYDecimals: params.tokenOutDecimals },
         userAddress,
         0.01
       );
