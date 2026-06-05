@@ -711,10 +711,21 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
         functionName = 'swap-bitflow-router';
       }
 
-      // SDK args cover: pool/router, id, token-x, token-y, amount-in, min-amount-out
-      // Paymaster appends: fee-amount, relayer, fee-token
+      // The Bitflow SDK's getSwapParams builds args for calling the pool/router
+      // contract *directly* — so functionArgs covers only the pool's own function
+      // args: (id, token-x, token-y, amount-in, min-amount-out).
+      //
+      // The paymaster functions (swap-bitflow-stableswap / swap-bitflow-router)
+      // require the pool/router as the FIRST argument (a trait reference), then
+      // all of the pool's own args, then the 3 fee args at the end:
+      //   (pool, id, token-x, token-y, amount-in, min-amount-out, fee-amount, relayer, fee-token)
+      //
+      // We must prepend the resolved pool/router contractPrincipalCV, otherwise
+      // the wallet receives 8 args where 9 are expected → "Missing function arguments".
+      const [poolArgAddr, poolArgName] = resolvedPool.split('.');
       const functionArgs = [
-        ...swapParams.functionArgs,
+        contractPrincipalCV(poolArgAddr, poolArgName), // pool/router trait arg (prepended)
+        ...swapParams.functionArgs,                    // id, token-x, token-y, amount-in, min-amount-out
         uintCV(BigInt(feeAmount)),
         principalCV(relayerAddress!),
         contractPrincipalCV(feeTokenAddr, feeTokenName),
