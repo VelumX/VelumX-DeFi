@@ -155,8 +155,13 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     return true;
   };
 
-  // Contracts that implement bitflow-router-trait (swap-x-for-y) and are
-  // callable by the paymaster's swap-bitflow-router function.
+  // Contracts that implement bitflow-router-trait (swap-x-for-y(id, token-x, token-y, amount-in, min-out))
+  // and are callable by the paymaster's swap-bitflow-router function.
+  //
+  // NOTE: router-stableswap-xyk-v-1-3 is intentionally EXCLUDED — it uses tuple-based
+  // function args (swap-helper-a with stableswap-tokens, stableswap-pools, xyk-tokens, xyk-pools
+  // tuples) and does NOT implement the bitflow-router-trait swap-x-for-y interface.
+  // Routes through that contract must fall back to the DEVELOPER_SPONSORS path.
   const PAYMASTER_COMPATIBLE_ROUTERS = new Set([
     'router-stx-ststx-bitflow-alex-v-2-1',
     'router-stx-ststx-bitflow-alex-v-1-2',
@@ -165,7 +170,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
     'router-stx-ststx-bitflow-arkadiko-v-1-1',
     'router-stx-ststx-bitflow-xyk-v-1-1',
     'router-stx-usda-arkadiko-alex-v-1-1',
-    'router-stableswap-xyk-v-1-3',
+    // router-stableswap-xyk-v-1-3 removed — uses tuple args, not swap-x-for-y trait
     'router-xyk-arkadiko-v-1-1',
     'router-xyk-alex-v-1-1',
     'router-xyk-alex-v-1-2',
@@ -209,12 +214,22 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   if (validRoutes.length === 0 && quoteResult.bestRoute) validRoutes.push(quoteResult.bestRoute);
   if (validRoutes.length === 0) throw new Error('No swap route found on Bitflow');
 
-  // For USER_PAYS, prefer paymaster-compatible routes. Fall back to all valid
-  // routes only if no compatible route exists (will use DEVELOPER_SPONSORS path).
+  // For USER_PAYS, prefer paymaster-compatible routes. If no compatible route
+  // exists, fall back to the DEVELOPER_SPONSORS execution path — the relayer
+  // sponsors the STX fee and the user pays nothing. This handles routes like
+  // USDCx→STX→aeUSDC→sBTC that go through router-stableswap-xyk-v-1-3, whose
+  // tuple-based swap-helper-a signature is incompatible with the paymaster.
   const paymasterRoutes = validRoutes.filter(r => {
     const contract = (r as any).swapData?.contract || '';
     return isPaymasterCompatible(contract);
   });
+
+  // If no paymaster-compatible route exists in USER_PAYS mode, force the
+  // DEVELOPER_SPONSORS path so we call Bitflow directly rather than trying
+  // to route through the paymaster with wrong args.
+  // Note: isDeveloperSponsoring hasn't been evaluated yet here — we compute
+  // noPaymasterRoute unconditionally and factor it in below after the estimate.
+  const noPaymasterRoute = paymasterRoutes.length === 0;
 
   const bestRoute = paymasterRoutes.length > 0 ? paymasterRoutes[0] : validRoutes[0];
 
@@ -244,7 +259,7 @@ export async function executeBitflowGaslessSwap(params: BitflowGaslessSwapParams
   // 3. Build VelumX Contract Call based on Policy
   onProgress?.('Preparing VelumX transaction...');
   
-  const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS');
+  const isDeveloperSponsoring = (estimate.policy === 'DEVELOPER_SPONSORS' || params.sponsorshipPolicy === 'DEVELOPER_SPONSORS' || noPaymasterRoute);
 
   // Guard: USER_PAYS requires a valid relayer address to receive the fee token
   if (!isDeveloperSponsoring && !relayerAddress) {
